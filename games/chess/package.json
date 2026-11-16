@@ -1,0 +1,25 @@
+{
+  "name": "chess-playground",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'",
+    "build": "node build.mjs",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "private": "true",
+  "dependencies": {
+    "chess.js": "^1.4.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "chessground": "^9.2.1",
+    "esbuild": "^0.28.2",
+    "stockfish": "^19.0.1"
+  }
+}

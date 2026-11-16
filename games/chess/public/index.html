@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en" data-board="green">
+<head>
+  <script>try{var t=JSON.parse(localStorage.getItem('cp.theme'));if(t)document.documentElement.dataset.board=t}catch(e){}</script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Chess Playground</title>
+  <meta name="description" content="Play chess in your browser against the computer, or with a friend, with no login.">
+  <meta name="theme-color" content="#302e2b">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/board.css?v=1ea8873d74">
+  <link rel="stylesheet" href="style.css?v=1ea8873d74">
+</head>
+<body data-view="home">
+  <header class="topbar">
+    <a class="brand" href="../" title="All games">
+      <span class="brand-mark pc knight white" aria-hidden="true"></span>
+      <span>Chess Playground</span>
+    </a>
+    <nav class="topbar-nav">
+      <a class="topbar-link" href="about.html">About</a>
+      <a class="topbar-link" href="../">All games</a>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="board-col">
+      <div class="player" id="bar-top">
+        <div class="p-avatar"></div>
+        <div class="p-info">
+          <div class="p-line"><span class="p-name"></span><span class="p-tag"></span><span class="p-dot" hidden></span></div>
+          <div class="p-line small"><span class="p-captured"></span><span class="p-adv"></span></div>
+        </div>
+        <div class="p-clock" hidden></div>
+      </div>
+
+      <div class="board-wrap">
+        <div id="board" class="cg-wrap"></div>
+        <div id="promo" hidden></div>
+      </div>
+
+      <div class="player" id="bar-bottom">
+        <div class="p-avatar"></div>
+        <div class="p-info">
+          <div class="p-line"><span class="p-name"></span><span class="p-tag"></span><span class="p-dot" hidden></span></div>
+          <div class="p-line small"><span class="p-captured"></span><span class="p-adv"></span></div>
+        </div>
+        <div class="p-clock" hidden></div>
+      </div>
+    </section>
+
+    <aside class="side">
+      <!-- Menu -->
+      <div class="view" id="view-home">
+        <div class="panel-head stack">
+          <h1>Play Chess</h1>
+          <p class="muted">No sign-up. Pick a mode and start playing.</p>
+        </div>
+        <div class="menu">
+          <button class="menu-item continue" id="continue" hidden>
+            <span class="mi-icon">⟲</span>
+            <span class="mi-text"><b>Continue game</b><small id="continue-label"></small></span>
+          </button>
+          <button class="menu-item" data-goto="bot">
+            <span class="mi-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="3"/><circle cx="9" cy="13" r="1.6"/><circle cx="15" cy="13" r="1.6"/><path d="M12 3v4M9 19v2M15 19v2"/></svg>
+            </span>
+            <span class="mi-text"><b>Play vs Computer</b><small>10 levels, from beginner to maximum strength</small></span>
+          </button>
+          <button class="menu-item" data-goto="friend">
+            <span class="mi-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
+            </span>
+            <span class="mi-text"><b>Play a Friend Online</b><small>Create a link, send it, play from anywhere</small></span>
+          </button>
+          <button class="menu-item" data-goto="local">
+            <span class="mi-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M2.5 20a5.5 5.5 0 0 1 11 0M10.5 20a5.5 5.5 0 0 1 11 0"/></svg>
+            </span>
+            <span class="mi-text"><b>Pass &amp; Play</b><small>Two players on this device</small></span>
+          </button>
+        </div>
+        <a class="about-link" href="about.html">About · Credits &amp; licenses</a>
+      </div>
+
+      <!-- Bot setup -->
+      <div class="view" id="view-bot" hidden>
+        <div class="panel-head"><button class="back" data-goto="home" aria-label="Back">‹</button><h2>Play vs Computer</h2></div>
+        <div class="form">
+          <label class="field">
+            <span id="bot-level-name">Level 4</span>
+            <input type="range" id="bot-level" min="1" max="10" step="1">
+            <span class="range-ends"><small>Easier</small><small>Harder</small></span>
+          </label>
+          <div class="field">
+            <span>I play as</span>
+            <div class="chip-group" id="bot-color">
+              <button type="button" class="chip color-chip" data-value="white"><span class="pc king white"></span>White</button>
+              <button type="button" class="chip color-chip" data-value="random"><span class="rand-icon">?</span>Random</button>
+              <button type="button" class="chip color-chip" data-value="black"><span class="pc king black"></span>Black</button>
+            </div>
+          </div>
+          <button class="btn primary big" id="bot-start">Play</button>
+        </div>
+      </div>
+
+      <!-- Friend setup -->
+      <div class="view" id="view-friend" hidden>
+        <div class="panel-head"><button class="back" data-goto="home" aria-label="Back">‹</button><h2>Play a Friend Online</h2></div>
+        <div class="form">
+          <label class="field"><span>Your name</span><input class="input" id="friend-name" maxlength="20"></label>
+          <div class="field"><span>Time control</span><div class="chips" id="friend-tc"></div></div>
+          <div class="field">
+            <span>I play as</span>
+            <div class="chip-group" id="friend-color">
+              <button type="button" class="chip color-chip" data-value="white"><span class="pc king white"></span>White</button>
+              <button type="button" class="chip color-chip" data-value="random"><span class="rand-icon">?</span>Random</button>
+              <button type="button" class="chip color-chip" data-value="black"><span class="pc king black"></span>Black</button>
+            </div>
+          </div>
+          <button class="btn primary big" id="friend-start">Create game link</button>
+          <p class="muted small">You'll get a link to send to your friend. Whoever opens it first takes the other side. Anyone else who opens it can watch.</p>
+        </div>
+      </div>
+
+      <!-- Local setup -->
+      <div class="view" id="view-local" hidden>
+        <div class="panel-head"><button class="back" data-goto="home" aria-label="Back">‹</button><h2>Pass &amp; Play</h2></div>
+        <div class="form">
+          <div class="field"><span>Time control</span><div class="chips" id="local-tc"></div></div>
+          <label class="toggle"><input type="checkbox" id="local-flip"><span>Flip the board after every move</span></label>
+          <button class="btn primary big" id="local-start">Start game</button>
+        </div>
+      </div>
+
+      <!-- Game -->
+      <div class="view game-view" id="view-game" hidden>
+        <div class="panel-head game-head">
+          <div>
+            <h2 id="g-title"></h2>
+            <div class="g-sub"><span id="g-spectators"></span><button class="linkish" id="g-share" hidden>Copy game link</button></div>
+          </div>
+        </div>
+        <div class="g-status" id="g-status" role="status" aria-live="polite"></div>
+        <div class="invite" id="g-invite" hidden>
+          <p>Send this link to your friend:</p>
+          <div class="invite-row">
+            <input class="input" id="invite-link" readonly>
+            <button class="btn primary" id="copy-link">Copy</button>
+            <button class="btn" id="share-link" hidden>Share</button>
+          </div>
+        </div>
+        <div class="moves" id="moves"></div>
+        <div class="nav">
+          <button class="icon-btn" id="nav-first" title="First move (↑)" aria-label="First move">⏮</button>
+          <button class="icon-btn" id="nav-prev" title="Previous move (←)" aria-label="Previous move">◀</button>
+          <button class="icon-btn" id="nav-next" title="Next move (→)" aria-label="Next move">▶</button>
+          <button class="icon-btn" id="nav-last" title="Latest move (↓)" aria-label="Latest move">⏭</button>
+        </div>
+        <div class="actions" id="actions"></div>
+        <div class="chat" id="chat" hidden>
+          <div class="chat-log" id="chat-log"></div>
+          <form id="chat-form" class="chat-form" autocomplete="off">
+            <input class="input" id="chat-input" maxlength="200" placeholder="Say something nice…">
+          </form>
+        </div>
+      </div>
+
+      <div class="tools">
+        <button class="icon-btn" id="flip-btn" title="Flip board (F)" aria-label="Flip board">⇅</button>
+        <button class="icon-btn" id="sound-btn" title="Sound on/off" aria-label="Toggle sound">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path class="wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12"/><path class="mute" d="M16 9l6 6M22 9l-6 6"/></svg>
+        </button>
+        <button class="icon-btn" id="pgn-btn" title="Copy PGN" aria-label="Copy PGN">PGN</button>
+        <button class="icon-btn" id="settings-btn" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle class="hole" cx="12" cy="12" r="3"/><path class="gear" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+      </div>
+    </aside>
+  </main>
+
+  <div class="modal" id="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <button class="modal-close" id="modal-close" aria-label="Close">×</button>
+      <h2 id="modal-title"></h2>
+      <div id="modal-body"></div>
+      <div class="modal-actions" id="modal-actions"></div>
+    </div>
+  </div>
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="app.js?v=1ea8873d74"></script>
+</body>
+</html>

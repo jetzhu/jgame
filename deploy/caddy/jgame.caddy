@@ -1,0 +1,27 @@
+# jgame.duckdns.org (same DuckDNS account/token as jetzhu).
+# SOURCE OF TRUTH: github.com/jetzhu/jgame deploy/caddy/jgame.caddy. deploy.sh installs it
+# into reverse-proxy/domains/ and reloads Caddy, so edit it in the repo, not in place.
+# Landing page: repo site/ synced to ../www/jgame (mounted at /srv/www/jgame).
+# Games are path services; each one keeps its own route below.
+jgame.duckdns.org {
+	import hardening
+
+	# Chess Playground: games/chess (node server.js, user unit chess-playground.service)
+	redir /chess_playground /chess_playground/ 308
+	handle_path /chess_playground/* {
+		reverse_proxy 127.0.0.1:3100
+	}
+
+	handle {
+		root * /srv/www/jgame
+		file_server
+	}
+}
+
+# Subdomains: add "@x host x.jgame.duckdns.org" + "handle @x { reverse_proxy ... }" above the abort.
+*.jgame.duckdns.org {
+	import hardening
+	handle {
+		abort
+	}
+}

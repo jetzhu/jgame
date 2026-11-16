@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>About · Chess Playground</title>
+  <meta name="description" content="About Chess Playground: credits, open-source licenses and privacy.">
+  <meta name="theme-color" content="#302e2b">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/board.css?v=1ea8873d74">
+  <link rel="stylesheet" href="style.css?v=1ea8873d74">
+  <style>
+    .about { max-width: 760px; margin: 0 auto; padding: 32px 16px 56px; }
+    .about h1 { font-size: 2rem; margin-bottom: 6px; }
+    .about h2 { font-size: 1.15rem; margin: 36px 0 12px; }
+    .about p, .about li { color: #dcdad6; }
+    .about a { color: var(--green); }
+    .about ul { padding-left: 20px; }
+    .about li { margin: 6px 0; }
+    .credits { display: flex; flex-direction: column; gap: 10px; }
+    .credit { background: var(--panel); border-radius: 8px; padding: 14px 16px; }
+    .credit-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+    .credit-head b { font-size: 1.05rem; }
+    .lic { font-size: .78rem; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: #ffffff14; color: var(--muted); white-space: nowrap; }
+    .credit p { margin: 6px 0 0; font-size: .92rem; color: var(--muted); }
+    .back-btn { display: inline-flex; margin-top: 28px; text-decoration: none; }
+    .piece-row { display: flex; gap: 4px; margin: 4px 0 0; }
+    .piece-row .pc { width: 34px; height: 34px; }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" title="Back to the game">
+      <span class="brand-mark pc knight white" aria-hidden="true"></span>
+      <span>Chess Playground</span>
+    </a>
+    <nav class="topbar-nav">
+      <a class="topbar-link" href="./">Play</a>
+      <a class="topbar-link" href="../">All games</a>
+    </nav>
+  </header>
+
+  <main class="about">
+    <h1>About</h1>
+    <p>Chess Playground is a free, ad-free chess site. You can play the computer, play a friend online with a share link, or play two people on one device. There are no accounts and no sign-up.</p>
+
+    <h2>Privacy</h2>
+    <ul>
+      <li>No accounts, cookies, analytics or ads.</li>
+      <li>Your browser's local storage keeps your settings (board colors, sound, last choices), your display name, an unfinished game against the computer or a pass &amp; play game, and a private key that lets you rejoin your own online games. None of this leaves your device unless you play online.</li>
+      <li>Games against the computer run entirely in your browser. Nothing is sent to the server.</li>
+      <li>Online games pass through this server so both players see the moves. Rooms, moves and chat exist only in the server's memory. They are not written to disk and disappear once a room is inactive.</li>
+    </ul>
+
+    <h2>Credits &amp; open-source licenses</h2>
+    <p>This site is built on these open-source projects. Many thanks to their authors.</p>
+    <div class="credits">
+      <div class="credit">
+        <div class="credit-head"><b><a href="https://stockfishchess.org/">Stockfish 19</a></b><span class="lic">GPL-3.0</span></div>
+        <p>The chess engine behind the computer opponent and hints, by the Stockfish developers (<a href="https://github.com/official-stockfish/Stockfish">source</a>). It runs as a WebAssembly build from <a href="https://github.com/nmrugg/stockfish.js">Stockfish.js</a> by Nathan Rugg and contributors (lite single-threaded build, v19.0.1). <a href="vendor/stockfish-COPYING.txt">License text</a>.</p>
+      </div>
+      <div class="credit">
+        <div class="credit-head"><b><a href="https://github.com/lichess-org/chessground">chessground</a></b><span class="lic">GPL-3.0-or-later</span></div>
+        <p>The interactive board (dragging, animation, arrows, premoves), by Thibault Duplessis and the lichess.org contributors. Version 9.2.1.</p>
+      </div>
+      <div class="credit">
+        <div class="credit-head"><b><a href="https://github.com/jhlywa/chess.js">chess.js</a></b><span class="lic">BSD-2-Clause</span></div>
+        <p>Move generation and the rules of chess, used in the browser and on the server. Copyright © 2025 Jeff Hlywa. Version 1.4.0. The full notice is in <a href="vendor/THIRD-PARTY-LICENSES.txt">third-party licenses</a>.</p>
+      </div>
+      <div class="credit">
+        <div class="credit-head"><b><a href="https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces">“cburnett” chess pieces</a></b><span class="lic">GPL-2.0-or-later</span></div>
+        <p>Piece artwork by Colin M. L. Burnett, as bundled with chessground.</p>
+        <div class="piece-row" aria-hidden="true">
+          <span class="pc king white"></span><span class="pc queen white"></span><span class="pc rook white"></span><span class="pc bishop white"></span><span class="pc knight white"></span><span class="pc pawn white"></span>
+          <span class="pc king black"></span><span class="pc queen black"></span><span class="pc rook black"></span><span class="pc bishop black"></span><span class="pc knight black"></span><span class="pc pawn black"></span>
+        </div>
+      </div>
+      <div class="credit">
+        <div class="credit-head"><b><a href="https://github.com/websockets/ws">ws</a></b><span class="lic">MIT</span></div>
+        <p>WebSocket server used for online games (server side only).</p>
+      </div>
+      <div class="credit">
+        <div class="credit-head"><b><a href="https://esbuild.github.io/">esbuild</a></b><span class="lic">MIT</span></div>
+        <p>Bundles the site's JavaScript. It's a build tool and isn't shipped to your browser.</p>
+      </div>
+    </div>
+    <p>Sound effects are generated in your browser, and text uses your device's system fonts. Neither depends on outside media files.</p>
+
+    <h2>Source code</h2>
+    <p>Chess Playground's own code is free software under the <a href="LICENSE.txt">GNU General Public License v3.0 or later</a>, as it must be because it includes GPL components. Download the complete source: <a href="chess-playground-source.tar.gz">chess-playground-source.tar.gz</a>. Exact versions of the libraries above are pinned in its <code>package-lock.json</code>. Their unmodified sources are available from the links above.</p>
+    <p>Chess Playground is an independent hobby project and is not affiliated with any chess website or organization.</p>
+
+    <a class="btn primary back-btn" href="./">Back to the game</a>
+  </main>
+</body>
+</html>

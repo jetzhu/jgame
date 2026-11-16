@@ -1,0 +1,18 @@
+[Unit]
+Description=Chess Playground (https://jgame.duckdns.org/chess_playground/)
+After=network.target
+
+[Service]
+# Runs the live release; deploy/deploy.sh swaps the "current" symlink and restarts.
+WorkingDirectory=%h/srv/jgame/current/games/chess
+ExecStart=/usr/bin/node server.js
+Environment=HOST=127.0.0.1 PORT=3100 NODE_ENV=production
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target
