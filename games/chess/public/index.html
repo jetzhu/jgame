@@ -8,8 +8,8 @@
   <meta name="description" content="Play chess in your browser against the computer, or with a friend, with no login.">
   <meta name="theme-color" content="#302e2b">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="vendor/board.css?v=1ea8873d74">
-  <link rel="stylesheet" href="style.css?v=1ea8873d74">
+  <link rel="stylesheet" href="vendor/board.css?v=13865a49a6">
+  <link rel="stylesheet" href="style.css?v=13865a49a6">
 </head>
 <body data-view="home">
   <header class="topbar">
@@ -118,6 +118,7 @@
               <button type="button" class="chip color-chip" data-value="black"><span class="pc king black"></span>Black</button>
             </div>
           </div>
+          <p class="hosting-line small"><span class="muted">Hosting:</span> <span id="hosting-line-text"></span> · <button type="button" class="linkish" id="hosting-change">Change</button></p>
           <button class="btn primary big" id="friend-start">Create game link</button>
           <p class="muted small">You'll get a link to send to your friend. Whoever opens it first takes the other side. Anyone else who opens it can watch.</p>
         </div>
@@ -139,6 +140,7 @@
           <div>
             <h2 id="g-title"></h2>
             <div class="g-sub"><span id="g-spectators"></span><button class="linkish" id="g-share" hidden>Copy game link</button></div>
+            <div class="g-conn" id="g-conn" hidden></div>
           </div>
         </div>
         <div class="g-status" id="g-status" role="status" aria-live="polite"></div>
@@ -189,6 +191,6 @@
   </div>
   <div class="toast" id="toast" hidden></div>
 
-  <script type="module" src="app.js?v=1ea8873d74"></script>
+  <script type="module" src="app.js?v=13865a49a6"></script>
 </body>
 </html>

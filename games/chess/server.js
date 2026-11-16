@@ -1,21 +1,35 @@
-// Chess Playground server: static files + WebSocket rooms for online play.
-// Served behind Caddy at https://jgame.duckdns.org/chess_playground/ (prefix stripped).
+// Chess Playground server, behind Caddy at https://jgame.duckdns.org/chess_playground/ (prefix stripped).
+//
+//  - static files from public/
+//  - GET /status       -> whether server-hosted games are available (only when this machine is idle)
+//  - WebSocket /ws
+//      server-hosted games: the server runs the GameRoom (src/room-core.js)
+//      player-hosted games: the creator's browser runs the GameRoom; the server only introduces
+//                           peers (WebRTC signaling) and relays traffic when a direct link fails
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { Chess } from 'chess.js';
+import { GameRoom } from './src/room-core.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3100);
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 
+// Server-hosted games are offered only while the machine is nearly idle.
+const MAX_LOAD_PER_CPU = Number(process.env.MAX_LOAD_PER_CPU ?? 0.5);
+const MIN_MEM_AVAILABLE = Number(process.env.MIN_MEM_AVAILABLE ?? 0.25);
+const MAX_SERVER_GAMES = Number(process.env.MAX_SERVER_GAMES ?? 10);
+const FORCE_HOSTING = process.env.SERVER_HOSTING; // 'on' | 'off' overrides the load check (tests)
+
 const MAX_ROOMS = 5000;
-const ROOM_IDLE_MS = 24 * 3600 * 1000; // drop rooms idle this long
-const EMPTY_ROOM_MS = 2 * 3600 * 1000; // drop rooms with nobody connected this long
-const MAX_CHAT = 60;
+const MAX_PEERS = 20; // per player-hosted room (players + spectators)
+const ROOM_IDLE_MS = 24 * 3600 * 1000;
+const EMPTY_ROOM_MS = 2 * 3600 * 1000;
+const ID_RE = /^[A-Za-z0-9]{4,16}$/;
 
 // ---------------------------------------------------------------- static files
 const TYPES = {
@@ -28,51 +42,76 @@ const TYPES = {
   '.ico': 'image/x-icon',
   '.json': 'application/json',
   '.txt': 'text/plain; charset=utf-8',
+  '.gz': 'application/gzip',
+  '.map': 'application/json',
 };
 
 function serveStatic(req, res) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.writeHead(405).end();
-    return;
-  }
+  if (req.method !== 'GET' && req.method !== 'HEAD') return res.writeHead(405).end();
   let urlPath;
   try {
     urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   } catch {
-    res.writeHead(400).end();
-    return;
+    return res.writeHead(400).end();
   }
   if (urlPath === '/healthz') {
-    res.writeHead(200, { 'Content-Type': 'text/plain' }).end(`ok rooms=${rooms.size}\n`);
-    return;
+    return res.writeHead(200, { 'Content-Type': 'text/plain' }).end(`ok server=${serverRooms.size} p2p=${p2pRooms.size}\n`);
+  }
+  if (urlPath === '/status') {
+    return res
+      .writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+      .end(JSON.stringify({ serverHosting: serverHosting() }));
   }
   if (urlPath.endsWith('/')) urlPath += 'index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, urlPath));
-  if (!file.startsWith(PUBLIC_DIR + path.sep)) {
-    res.writeHead(403).end();
-    return;
-  }
+  if (!file.startsWith(PUBLIC_DIR + path.sep)) return res.writeHead(403).end();
   fs.stat(file, (err, st) => {
-    if (err || !st.isFile()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
-      return;
-    }
+    if (err || !st.isFile()) return res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
     const ext = path.extname(file);
-    const headers = {
+    res.writeHead(200, {
       'Content-Type': TYPES[ext] || 'application/octet-stream',
       'Content-Length': st.size,
-      // HTML must revalidate so new builds show up; versioned assets can cache.
       'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600',
-    };
-    res.writeHead(200, headers);
+    });
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);
   });
 }
 
+// ---------------------------------------------------------------- load check
+let hostingCache = { at: 0, value: null };
+function memAvailableRatio() {
+  try {
+    const info = fs.readFileSync('/proc/meminfo', 'utf8');
+    const total = Number(info.match(/MemTotal:\s+(\d+)/)[1]);
+    const avail = Number(info.match(/MemAvailable:\s+(\d+)/)[1]);
+    return avail / total;
+  } catch {
+    return os.freemem() / os.totalmem();
+  }
+}
+
+function serverHosting() {
+  if (FORCE_HOSTING === 'on') return { available: true };
+  if (FORCE_HOSTING === 'off') return { available: false, reason: 'Server-hosted games are turned off.' };
+  if (Date.now() - hostingCache.at < 5000) return hostingCache.value;
+  const [l1, l5] = os.loadavg();
+  const load = Math.max(l1, l5) / os.cpus().length;
+  const mem = memAvailableRatio();
+  let active = 0;
+  for (const r of serverRooms.values()) if (r.status !== 'over' && r.conns.size) active++;
+  let value = { available: true };
+  if (load > MAX_LOAD_PER_CPU || mem < MIN_MEM_AVAILABLE) value = { available: false, reason: 'The server is busy right now.' };
+  else if (active >= MAX_SERVER_GAMES) value = { available: false, reason: 'All server-hosted game slots are in use.' };
+  hostingCache = { at: Date.now(), value };
+  return value;
+}
+
 // ---------------------------------------------------------------- rooms
-/** @type {Map<string, Room>} */
-const rooms = new Map();
+/** @type {Map<string, GameRoom>} server-hosted games */
+const serverRooms = new Map();
+/** @type {Map<string, {id, secret, host, peers: Map<string, any>, hostGoneAt, lastActive}>} player-hosted games */
+const p2pRooms = new Map();
 
 const randomId = (n) => {
   const abc = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -81,308 +120,166 @@ const randomId = (n) => {
   for (let i = 0; i < n; i++) s += abc[bytes[i] % abc.length];
   return s;
 };
-const other = (c) => (c === 'white' ? 'black' : 'white');
-const colorOf = (turn) => (turn === 'w' ? 'white' : 'black');
-const cleanName = (s) =>
-  String(s || '')
-    .replace(/[\u0000-\u001f<>]/g, '')
-    .trim()
-    .slice(0, 20) || 'Guest';
-
-const TIME_CONTROLS = new Set(['none', '1+0', '2+1', '3+0', '3+2', '5+0', '5+3', '10+0', '10+5', '15+10', '30+0']);
-function parseTc(tc) {
-  if (!TIME_CONTROLS.has(tc) || tc === 'none') return null;
-  const [m, inc] = tc.split('+').map(Number);
-  return { initial: m * 60000, increment: inc * 1000, label: tc };
-}
-
-class Room {
-  constructor(tc, creatorColor) {
-    this.id = randomId(8);
-    while (rooms.has(this.id)) this.id = randomId(8);
-    this.tc = tc;
-    this.seats = { white: null, black: null }; // {token, name}
-    this.creatorColor = creatorColor;
-    this.sockets = new Set();
-    this.chat = [];
-    this.gameNo = 0;
-    this.lastActive = Date.now();
-    this.emptySince = Date.now();
-    this.timer = null;
-    this.newGame();
-  }
-
-  newGame() {
-    this.gameNo++;
-    this.chess = new Chess();
-    this.moves = []; // {from,to,promotion,san}
-    this.status = this.seats.white && this.seats.black ? 'playing' : 'waiting';
-    this.result = null; // {winner, reason}
-    this.drawOffer = null;
-    this.rematchOffer = null;
-    this.clock = this.tc ? { white: this.tc.initial, black: this.tc.initial, since: null } : null;
-    clearTimeout(this.timer);
-  }
-
-  // Clocks start once each side has made one move (both players are present by then).
-  clockRunning() {
-    return this.clock && this.status === 'playing' && this.moves.length >= 2 ? colorOf(this.chess.turn()) : null;
-  }
-
-  remaining(color) {
-    if (!this.clock) return null;
-    let t = this.clock[color];
-    if (this.clock.since && this.clockRunning() === color) t -= Date.now() - this.clock.since;
-    return Math.max(0, t);
-  }
-
-  scheduleFlag() {
-    clearTimeout(this.timer);
-    const running = this.clockRunning();
-    if (!running) return;
-    this.timer = setTimeout(() => this.checkFlag(), this.remaining(running) + 50);
-  }
-
-  checkFlag() {
-    const running = this.clockRunning();
-    if (!running || this.remaining(running) > 0) return this.scheduleFlag();
-    this.clock[running] = 0;
-    this.clock.since = null;
-    const winner = other(running);
-    // Flagging against a lone king (or king + one minor) is a draw.
-    this.finish(canMate(this.chess, winner) ? winner : null, canMate(this.chess, winner) ? 'timeout' : 'timeout vs insufficient material');
-    this.broadcast();
-  }
-
-  finish(winner, reason) {
-    if (this.clock && this.clockRunning()) {
-      const c = this.clockRunning();
-      this.clock[c] = this.remaining(c);
-    }
-    if (this.clock) this.clock.since = null;
-    this.status = 'over';
-    this.result = { winner, reason };
-    this.drawOffer = null;
-    clearTimeout(this.timer);
-  }
-
-  seatOf(token) {
-    if (!token) return null;
-    for (const c of ['white', 'black']) if (this.seats[c]?.token === token) return c;
-    return null;
-  }
-
-  connectedColors() {
-    const set = new Set();
-    for (const ws of this.sockets) if (ws.seat) set.add(ws.seat);
-    return set;
-  }
-
-  stateFor(ws) {
-    const online = this.connectedColors();
-    const players = {};
-    for (const c of ['white', 'black']) {
-      players[c] = this.seats[c] ? { name: this.seats[c].name, online: online.has(c) } : null;
-    }
-    return {
-      t: 'state',
-      room: this.id,
-      gameNo: this.gameNo,
-      you: ws.seat || null,
-      token: ws.seat ? this.seats[ws.seat].token : null,
-      players,
-      spectators: [...this.sockets].filter((s) => !s.seat).length,
-      moves: this.moves,
-      status: this.status,
-      result: this.result,
-      drawOffer: this.drawOffer,
-      rematchOffer: this.rematchOffer,
-      tc: this.tc ? this.tc.label : 'none',
-      clock: this.clock ? { white: this.remaining('white'), black: this.remaining('black'), running: this.clockRunning() } : null,
-    };
-  }
-
-  broadcast() {
-    this.lastActive = Date.now();
-    for (const ws of this.sockets) send(ws, this.stateFor(ws));
-  }
-
-  sendChat(entry) {
-    this.chat.push(entry);
-    if (this.chat.length > MAX_CHAT) this.chat.shift();
-    for (const ws of this.sockets) send(ws, { t: 'chat', entries: [entry] });
-  }
-}
-
-// Can `color` deliver mate with its remaining material (used for timeouts)?
-function canMate(chess, color) {
-  const c = color[0];
-  let minors = 0;
-  for (const row of chess.board())
-    for (const sq of row) {
-      if (!sq || sq.color !== c || sq.type === 'k') continue;
-      if (sq.type === 'p' || sq.type === 'q' || sq.type === 'r') return true;
-      minors++;
-    }
-  return minors >= 2;
-}
-
-function gameEndReason(chess) {
-  if (chess.isCheckmate()) return { winner: colorOf(chess.turn()) === 'white' ? 'black' : 'white', reason: 'checkmate' };
-  if (chess.isStalemate()) return { winner: null, reason: 'stalemate' };
-  if (chess.isInsufficientMaterial()) return { winner: null, reason: 'insufficient material' };
-  if (chess.isThreefoldRepetition()) return { winner: null, reason: 'threefold repetition' };
-  if (chess.isDrawByFiftyMoves()) return { winner: null, reason: '50-move rule' };
-  return null;
-}
+const roomIdTaken = (id) => serverRooms.has(id) || p2pRooms.has(id);
+const io = { send: (ws, msg) => send(ws, msg) };
+const randomToken = () => crypto.randomBytes(16).toString('hex');
 
 function send(ws, msg) {
   if (ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
-function attach(ws, room, seat) {
-  if (ws.room && ws.room !== room) detach(ws);
-  ws.room = room;
-  ws.seat = seat;
-  room.sockets.add(ws);
-  room.emptySince = null;
-  send(ws, { t: 'chat', entries: room.chat, reset: true });
+// Drop whatever this socket was attached to.
+function detach(ws) {
+  if (ws.room) {
+    const room = ws.room;
+    ws.room = null;
+    room.detach(ws);
+    if (!room.conns.size) room.emptySince = Date.now();
+    room.broadcast();
+  }
+  if (ws.p2pHost) {
+    const r = ws.p2pHost;
+    ws.p2pHost = null;
+    if (r.host === ws) {
+      r.host = null;
+      r.hostGoneAt = Date.now();
+      for (const p of r.peers.values()) send(p, { t: 'host-gone' });
+    }
+  }
+  if (ws.p2p) {
+    const r = ws.p2p;
+    ws.p2p = null;
+    r.peers.delete(ws.peerId);
+    if (r.host) send(r.host, { t: 'peer-left', peerId: ws.peerId });
+  }
 }
 
-function detach(ws) {
-  const room = ws.room;
-  if (!room) return;
-  room.sockets.delete(ws);
-  ws.room = null;
-  if (room.sockets.size === 0) room.emptySince = Date.now();
-  room.broadcast();
+function closeP2p(r, notify = true) {
+  p2pRooms.delete(r.id);
+  if (r.host) r.host.p2pHost = null;
+  for (const p of r.peers.values()) {
+    if (notify) send(p, { t: 'room-closed' });
+    p.p2p = null;
+  }
 }
 
 function handle(ws, msg) {
-  const room = ws.room;
   switch (msg.t) {
+    // ------------------------------------------------ server-hosted
     case 'create': {
-      if (rooms.size >= MAX_ROOMS) return send(ws, { t: 'error', error: 'Server is busy, try again later.' });
+      const hosting = serverHosting();
+      if (!hosting.available) return send(ws, { t: 'error', code: 'busy', error: hosting.reason });
+      if (serverRooms.size + p2pRooms.size >= MAX_ROOMS) return send(ws, { t: 'error', error: 'Server is full, try again later.' });
+      let id = randomId(8);
+      while (roomIdTaken(id)) id = randomId(8);
       const pref = ['white', 'black', 'random'].includes(msg.color) ? msg.color : 'random';
       const color = pref === 'random' ? (crypto.randomInt(2) ? 'white' : 'black') : pref;
-      const r = new Room(parseTc(msg.tc), color);
-      rooms.set(r.id, r);
-      r.seats[color] = { token: crypto.randomBytes(16).toString('hex'), name: cleanName(msg.name) };
-      attach(ws, r, color);
-      r.broadcast();
+      const room = new GameRoom({ id, tc: msg.tc, io, randomToken });
+      serverRooms.set(id, room);
+      detach(ws);
+      ws.room = room;
+      room.claimSeat(ws, color, msg.name);
+      room.broadcast();
+      hostingCache.at = 0;
       return;
     }
     case 'join': {
-      const r = rooms.get(String(msg.room || ''));
-      if (!r) return send(ws, { t: 'error', error: 'This game link is invalid or has expired.', fatal: true });
-      let seat = r.seatOf(msg.token);
-      if (seat) {
-        if (msg.name) r.seats[seat].name = cleanName(msg.name);
-      } else if (!msg.spectate) {
-        const free = ['white', 'black'].find((c) => !r.seats[c]);
-        if (free) {
-          r.seats[free] = { token: crypto.randomBytes(16).toString('hex'), name: cleanName(msg.name) };
-          seat = free;
-          if (r.status === 'waiting') r.status = 'playing';
-        }
+      const id = String(msg.room || '');
+      const room = serverRooms.get(id);
+      if (room) {
+        detach(ws);
+        ws.room = room;
+        room.emptySince = null;
+        room.join(ws, msg);
+        room.broadcast();
+        return;
       }
-      attach(ws, r, seat);
-      r.broadcast();
-      return;
+      const r = p2pRooms.get(id);
+      if (r) {
+        if (r.peers.size >= MAX_PEERS) return send(ws, { t: 'error', error: 'This game is full.', fatal: true });
+        detach(ws);
+        ws.peerId = randomId(10);
+        ws.p2p = r;
+        ws.joinData = { token: msg.token || null, name: msg.name, spectate: !!msg.spectate };
+        r.peers.set(ws.peerId, ws);
+        r.lastActive = Date.now();
+        send(ws, { t: 'p2p-joined', room: id, peerId: ws.peerId, hostOnline: !!r.host });
+        if (r.host) send(r.host, { t: 'peer-join', peerId: ws.peerId, data: ws.joinData });
+        return;
+      }
+      // A participant (has a seat token) may be early: e.g. the host is still reconnecting after a restart.
+      return send(ws, {
+        t: 'error',
+        code: 'unknown-room',
+        fatal: !msg.token,
+        error: msg.token ? 'Waiting for the game host to reconnect…' : 'This game link is invalid or has expired.',
+      });
     }
-  }
 
-  if (!room) return;
-  const seat = ws.seat;
-
-  switch (msg.t) {
-    case 'move': {
-      if (!seat || room.status !== 'playing' || colorOf(room.chess.turn()) !== seat) return send(ws, { ...room.stateFor(ws), rejected: true });
-      let mv;
-      try {
-        mv = room.chess.move({ from: String(msg.from), to: String(msg.to), promotion: msg.promotion ? String(msg.promotion) : undefined });
-      } catch {
-        return send(ws, { ...room.stateFor(ws), rejected: true }); // illegal: resync this client
-      }
-      if (room.clock) {
-        const now = Date.now();
-        if (room.clock.since) {
-          room.clock[seat] = Math.max(0, room.clock[seat] - (now - room.clock.since));
-          if (room.clock[seat] <= 0) {
-            room.chess.undo();
-            room.checkFlag();
-            return;
-          }
+    // ------------------------------------------------ player-hosted: signaling + relay
+    case 'host': {
+      const id = String(msg.room || '');
+      const secret = String(msg.secret || '');
+      if (!ID_RE.test(id) || secret.length < 16 || secret.length > 128) return send(ws, { t: 'error', error: 'Bad host request.' });
+      let r = p2pRooms.get(id);
+      if (r) {
+        if (r.secret !== secret) return send(ws, { t: 'error', code: 'taken', error: 'That game id belongs to someone else.', fatal: true });
+        if (r.host && r.host !== ws) {
+          send(r.host, { t: 'error', code: 'host-moved', error: 'This game is now hosted from another tab.', fatal: true });
+          r.host.p2pHost = null;
         }
-        if (room.moves.length >= 2) room.clock[seat] += room.tc.increment;
-        room.moves.push({ from: mv.from, to: mv.to, promotion: mv.promotion || null, san: mv.san });
-        room.clock.since = room.moves.length >= 2 ? now : null;
       } else {
-        room.moves.push({ from: mv.from, to: mv.to, promotion: mv.promotion || null, san: mv.san });
+        if (serverRooms.has(id)) return send(ws, { t: 'error', code: 'taken', error: 'That game id is taken.', fatal: true });
+        if (serverRooms.size + p2pRooms.size >= MAX_ROOMS) return send(ws, { t: 'error', error: 'Server is full, try again later.' });
+        r = { id, secret, host: null, peers: new Map(), hostGoneAt: null, lastActive: Date.now() };
+        p2pRooms.set(id, r);
       }
-      room.drawOffer = room.drawOffer === seat ? seat : null; // a move declines an opponent's draw offer
-      const end = gameEndReason(room.chess);
-      if (end) room.finish(end.winner, end.reason);
-      else room.scheduleFlag();
-      room.broadcast();
+      if (ws.p2pHost !== r) detach(ws);
+      r.host = ws;
+      r.hostGoneAt = null;
+      r.lastActive = Date.now();
+      ws.p2pHost = r;
+      send(ws, { t: 'hosting', room: id });
+      // Re-introduce everyone who is waiting (e.g. after the host refreshed or this server restarted).
+      for (const [peerId, p] of r.peers) {
+        send(p, { t: 'host-back' });
+        send(ws, { t: 'peer-join', peerId, data: p.joinData });
+      }
       return;
     }
-    case 'resign':
-      if (seat && room.status === 'playing') {
-        if (room.moves.length < 2) room.finish(null, 'aborted');
-        else room.finish(other(seat), 'resignation');
-        room.broadcast();
+    case 'fwd': {
+      if (!msg.data || typeof msg.data !== 'object') return;
+      if (ws.p2pHost) {
+        const p = ws.p2pHost.peers.get(String(msg.to));
+        if (p) send(p, { t: 'fwd', from: 'host', data: msg.data });
+        ws.p2pHost.lastActive = Date.now();
+      } else if (ws.p2p) {
+        const r = ws.p2p;
+        if (r.host) send(r.host, { t: 'fwd', from: ws.peerId, data: msg.data });
+        else send(ws, { t: 'host-gone' });
+        r.lastActive = Date.now();
       }
-      return;
-    case 'draw':
-      if (!seat || room.status !== 'playing' || room.moves.length < 2) return;
-      if (room.drawOffer === other(seat)) room.finish(null, 'agreement');
-      else room.drawOffer = seat;
-      room.broadcast();
-      return;
-    case 'declineDraw':
-      if (seat && room.drawOffer === other(seat)) {
-        room.drawOffer = null;
-        room.broadcast();
-      }
-      return;
-    case 'flag':
-      room.checkFlag();
-      return;
-    case 'rematch':
-      if (!seat || room.status !== 'over') return;
-      if (room.rematchOffer === other(seat)) {
-        [room.seats.white, room.seats.black] = [room.seats.black, room.seats.white];
-        for (const s of room.sockets) if (s.seat) s.seat = other(s.seat);
-        room.newGame();
-      } else room.rematchOffer = seat;
-      room.broadcast();
-      return;
-    case 'chat': {
-      const text = String(msg.text || '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200);
-      if (!text) return;
-      const now = Date.now();
-      ws.chatTimes = (ws.chatTimes || []).filter((t) => now - t < 10000);
-      if (ws.chatTimes.length >= 5) return;
-      ws.chatTimes.push(now);
-      room.sendChat({ from: seat ? room.seats[seat].name : 'Spectator', color: seat, text, at: now });
       return;
     }
-    case 'name':
-      if (seat) {
-        room.seats[seat].name = cleanName(msg.name);
-        room.broadcast();
-      }
+    case 'peer-token':
+      // A guest reports the seat token its host gave it, so re-introductions (host refresh,
+      // server restart) put it back in its seat instead of joining as a newcomer.
+      if (ws.p2p && ws.joinData && typeof msg.token === 'string' && msg.token.length <= 64) ws.joinData.token = msg.token;
+      return;
+    case 'close':
+      if (ws.p2pHost) closeP2p(ws.p2pHost);
       return;
     case 'leave':
       detach(ws);
       return;
   }
+  // ------------------------------------------------ in-game messages for server-hosted rooms
+  if (ws.room) ws.room.handle(ws, msg);
 }
 
 // ---------------------------------------------------------------- wiring
 const server = http.createServer(serveStatic);
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16384 });
 
 wss.on('connection', (ws) => {
   ws.alive = true;
@@ -391,7 +288,7 @@ wss.on('connection', (ws) => {
   ws.on('message', (data) => {
     const now = Date.now();
     ws.msgTimes = ws.msgTimes.filter((t) => now - t < 1000);
-    if (ws.msgTimes.length > 20) return; // crude flood protection
+    if (ws.msgTimes.length > 40) return; // crude flood protection (ICE candidates come in bursts)
     ws.msgTimes.push(now);
     let msg;
     try {
@@ -418,11 +315,14 @@ setInterval(() => {
     ws.ping();
   }
   const now = Date.now();
-  for (const [id, r] of rooms) {
+  for (const [id, r] of serverRooms) {
     if (now - r.lastActive > ROOM_IDLE_MS || (r.emptySince && now - r.emptySince > EMPTY_ROOM_MS)) {
-      clearTimeout(r.timer);
-      rooms.delete(id);
+      r.destroy();
+      serverRooms.delete(id);
     }
+  }
+  for (const r of p2pRooms.values()) {
+    if (now - r.lastActive > ROOM_IDLE_MS || (!r.host && now - r.hostGoneAt > EMPTY_ROOM_MS)) closeP2p(r);
   }
 }, 30000).unref();
 

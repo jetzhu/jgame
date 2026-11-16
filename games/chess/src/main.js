@@ -3,6 +3,8 @@ import { Chess } from 'chess.js';
 import { Engine } from './engine.js';
 import { sound } from './sound.js';
 import { Net } from './net.js';
+import { GameRoom } from './room-core.js';
+import { DirectLink, webrtcSupported } from './p2p.js';
 
 // ------------------------------------------------------------------ constants
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -288,8 +290,8 @@ function userMove(from, to, promotion) {
   const m = applyMove({ from, to, promotion });
   if (!m) return syncBoard();
   if (S.mode === 'online') {
-    S.online.pending = uci(m);
-    net?.send({ t: 'move', from, to, promotion });
+    Object.assign(S.online, { pending: uci(m), pendingMove: { from, to, promotion }, pendingAt: Date.now() });
+    sendGame({ t: 'move', from, to, promotion });
   }
   afterMove();
 }
@@ -391,7 +393,7 @@ setInterval(() => {
     finish({ winner: ok ? winner : null, reason: ok ? 'timeout' : 'timeout vs insufficient material' });
   } else if (S.mode === 'online' && Date.now() - flagSentAt > 1000) {
     flagSentAt = Date.now();
-    net?.send({ t: 'flag' });
+    sendGame({ t: 'flag' });
   }
 }, 100);
 
@@ -496,7 +498,7 @@ function resign() {
   if (S.over) return;
   if (S.mode === 'online') {
     const abort = S.chess.history().length < 2;
-    confirmBox(abort ? 'Abort this game?' : 'Resign this game?', abort ? 'Abort' : 'Resign', () => net?.send({ t: 'resign' }));
+    confirmBox(abort ? 'Abort this game?' : 'Resign this game?', abort ? 'Abort' : 'Resign', () => sendGame({ t: 'resign' }));
     return;
   }
   const loser = S.mode === 'bot' ? opp(S.bot.color) : turn();
@@ -509,7 +511,7 @@ function offerDraw() {
   if (S.over) return;
   if (S.mode === 'local') confirmBox('Both players agree to a draw?', 'Agree draw', () => finish({ winner: null, reason: 'agreement' }));
   else if (S.mode === 'online') {
-    net?.send({ t: 'draw' });
+    sendGame({ t: 'draw' });
     if (S.online.drawOffer !== opp(S.online.you)) toast('Draw offer sent.');
   }
 }
@@ -626,7 +628,31 @@ function startLocal({ tc, autoFlip }) {
 }
 
 // ------------------------------------------------------------------ online
+// S.online.kind:
+//   'server' : server-hosted game (the server runs the GameRoom)
+//   'host'   : player-hosted game run by THIS browser (GameRoom lives in hostCtx)
+//   'guest'  : joined a player-hosted game; talks to the host directly (WebRTC) or via the server relay
+// The UI consumes 'state'/'chat' messages (onGameMsg) and sends game actions with sendGame().
 let net = null;
+let hostCtx = null; // {room, secret, links: Map<peerId, DirectLink>, serverPeers: Set, tick, lastTick, lastPeerMsgAt}
+let guestLink = null; // DirectLink to the host
+
+const hostingPref = () => (store.get('cp.hosting', 'player') === 'server' ? 'server' : 'player');
+const relayOnly = () => store.get('cp.relayOnly', false) === true;
+const randomHex = (bytes) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
+function randomId(n) {
+  const abc = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return [...crypto.getRandomValues(new Uint8Array(n))].map((b) => abc[b % abc.length]).join('');
+}
+
+async function fetchHostingStatus() {
+  try {
+    const r = await fetch('status', { cache: 'no-store' });
+    return (await r.json()).serverHosting;
+  } catch {
+    return { available: false, reason: 'Could not reach the server.' };
+  }
+}
 
 function tokens() {
   return store.get('cp.tokens', {});
@@ -649,12 +675,14 @@ function ensureNet() {
   net.onOpen = () => {
     const O = S.online;
     if (!O) return;
-    if (O.room) net.send({ t: 'join', room: O.room, token: tokens()[O.room], name: myName(), spectate: O.spectate });
-    else if (O.create) net.send({ t: 'create', ...O.create, name: myName() });
+    if (O.kind === 'host') net.send({ t: 'host', room: O.room, secret: hostCtx.secret });
+    else if (O.kind === 'server' && O.create) net.send({ t: 'create', ...O.create, name: myName() });
+    else net.send({ t: 'join', room: O.room, token: tokens()[O.room], name: myName(), spectate: O.spectate });
   };
   net.connect();
   return net;
 }
+const connectNet = () => (net?.isOpen ? net.onOpen() : ensureNet());
 
 function setUrlRoom(room) {
   const url = room ? `${location.pathname}?room=${room}` : location.pathname;
@@ -665,31 +693,43 @@ function inviteLink() {
   return `${location.origin}${location.pathname}?room=${S.online?.room}`;
 }
 
-function createOnline({ tc, color }) {
+function resetOnlineUi() {
   S.mode = 'online';
   newGameState();
-  S.online = { create: { tc, color }, room: null, you: null, players: {}, status: 'connecting', gameNo: 0 };
-  S.tc = tc;
   S.clock = null;
-  S.orientation = color === 'black' ? 'black' : 'white';
+  chatSeen.clear();
   $('#chat-log').innerHTML = '';
+}
+
+async function createOnline({ tc, color }) {
+  let kind = hostingPref() === 'server' ? 'server' : 'host';
+  if (kind === 'server') {
+    const st = await fetchHostingStatus();
+    if (!st.available) {
+      kind = 'host';
+      toast(`${st.reason} Hosting this game in your browser instead.`, 3500);
+    }
+  }
+  resetOnlineUi();
+  S.tc = tc;
+  if (kind === 'host') return startHosting({ tc, color });
+  S.online = { kind: 'server', create: { tc, color }, room: null, you: null, players: {}, status: 'connecting', gameNo: 0 };
+  S.orientation = color === 'black' ? 'black' : 'white';
   enterGame();
-  if (net?.isOpen) net.onOpen();
-  else ensureNet();
+  connectNet();
 }
 
 function joinOnline(room, spectate = false) {
-  S.mode = 'online';
-  newGameState();
-  S.online = { room, you: null, players: {}, status: 'connecting', gameNo: 0, spectate };
-  S.clock = null;
-  $('#chat-log').innerHTML = '';
+  resetOnlineUi();
+  S.online = { kind: null, room, you: null, players: {}, status: 'connecting', gameNo: 0, spectate };
   enterGame();
-  if (net?.isOpen) net.onOpen();
-  else ensureNet();
+  connectNet();
 }
 
 function leaveOnline() {
+  guestLink?.close();
+  guestLink = null;
+  if (S.online?.kind === 'host') stopHosting(true);
   if (net) {
     net.send({ t: 'leave' });
     net.close();
@@ -699,17 +739,245 @@ function leaveOnline() {
   setUrlRoom(null);
 }
 
+/** Send a game action (move, resign, chat…) to whoever runs the game. */
+function sendGame(msg) {
+  const O = S.online;
+  if (!O) return false;
+  if (O.kind === 'host') {
+    hostCtx?.room.handle('local', msg);
+    return true;
+  }
+  if (O.kind === 'guest') return guestLink?.send(msg) || !!net?.send({ t: 'fwd', to: 'host', data: msg });
+  return !!net?.send(msg);
+}
+
+// ---------------------------------------------------------- hosting (this browser runs the game)
+function startHosting({ tc, color }, saved = null) {
+  stopHosting(false);
+  const opts = { io: { send: hostSend }, randomToken: () => randomHex(16) };
+  let room;
+  try {
+    room = saved ? GameRoom.fromJSON(saved.room, opts) : new GameRoom({ id: randomId(8), tc, ...opts });
+  } catch {
+    if (saved) store.del(`cp.host.${saved.room?.id}`);
+    toast('Could not restore that game.');
+    return showMenu();
+  }
+  hostCtx = { room, secret: saved?.secret || randomHex(16), links: new Map(), serverPeers: new Set(), lastTick: Date.now(), lastPeerMsgAt: 0 };
+  hostCtx.tick = setInterval(hostTick, 1000);
+  S.online = { kind: 'host', room: room.id, you: null, players: {}, status: 'connecting', gameNo: 0, registered: false };
+  if (saved) room.attach('local', saved.hostSeat || null);
+  else room.claimSeat('local', color === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : color, myName());
+  enterGame();
+  room.broadcast(); // local state right away; peers arrive once the server knows us
+  connectNet();
+}
+
+function stopHosting(closeRoom) {
+  if (!hostCtx) return;
+  clearInterval(hostCtx.tick);
+  for (const l of hostCtx.links.values()) l.close();
+  if (closeRoom) {
+    net?.send({ t: 'close' });
+    store.del(`cp.host.${hostCtx.room.id}`);
+  }
+  hostCtx.room.destroy();
+  hostCtx = null;
+}
+
+function saveHosted() {
+  if (!hostCtx) return;
+  const { room, secret } = hostCtx;
+  store.set(`cp.host.${room.id}`, { secret, room: room.toJSON(), hostSeat: room.conns.get('local') || null, savedAt: Date.now() });
+}
+
+function hostSend(conn, msg) {
+  if (!hostCtx) return;
+  if (conn === 'local') {
+    if (msg.t === 'state') saveHosted();
+    queueMicrotask(() => onGameMsg(msg));
+    return;
+  }
+  const out = msg.t === 'state' ? { ...msg, direct: !relayOnly() && webrtcSupported() } : msg;
+  if (!hostCtx.links.get(conn)?.send(out)) net?.send({ t: 'fwd', to: conn, data: out });
+}
+
+function hostReceive(from, data) {
+  if (!hostCtx || !data) return;
+  hostCtx.lastPeerMsgAt = Date.now();
+  if (data.t === 'signal') return hostSignal(from, data);
+  hostCtx.room.handle(from, data);
+}
+
+function hostSignal(from, data) {
+  if (relayOnly() || !webrtcSupported()) return;
+  let link = hostCtx.links.get(from);
+  if (data.sdp?.type === 'offer') {
+    link?.close();
+    link = new DirectLink({
+      role: 'answer',
+      sendSignal: (s) => net?.send({ t: 'fwd', to: from, data: { t: 'signal', ...s } }),
+      onMessage: (m) => hostReceive(from, m),
+      onState: (st) => {
+        if (!hostCtx || hostCtx.links.get(from) !== link) return;
+        if (st === 'closed') {
+          hostCtx.links.delete(from);
+          if (!hostCtx.serverPeers.has(from)) dropPeer(from);
+        }
+        render();
+      },
+    });
+    hostCtx.links.set(from, link);
+  }
+  link?.signal(data);
+}
+
+function dropPeer(peerId) {
+  hostCtx.links.get(peerId)?.close();
+  hostCtx.links.delete(peerId);
+  if (hostCtx.room.detach(peerId)) hostCtx.room.broadcast();
+}
+
+// If this tab was frozen (phone screen off, tab suspended) during the opponent's turn,
+// their clock kept running in our room even though their moves couldn't reach us: refund it.
+function hostTick() {
+  const now = Date.now();
+  const gap = now - hostCtx.lastTick;
+  const quiet = hostCtx.lastPeerMsgAt < hostCtx.lastTick;
+  hostCtx.lastTick = now;
+  if (gap > 4000 && quiet) {
+    const me = hostCtx.room.conns.get('local');
+    if (me) {
+      hostCtx.room.forgive(gap - 1000, opp(me));
+      hostCtx.room.broadcast();
+    }
+  }
+}
+
+function hostOnNet(msg) {
+  const room = hostCtx?.room;
+  if (!room) return;
+  switch (msg.t) {
+    case 'hosting':
+      S.online.registered = true;
+      render();
+      return;
+    case 'peer-join':
+      hostCtx.serverPeers.add(msg.peerId);
+      room.join(msg.peerId, msg.data || {});
+      room.broadcast();
+      return;
+    case 'peer-left':
+      hostCtx.serverPeers.delete(msg.peerId);
+      if (!hostCtx.links.get(msg.peerId)?.isOpen) dropPeer(msg.peerId);
+      return;
+    case 'fwd':
+      if (room.conns.has(msg.from) || msg.data?.t === 'signal') hostReceive(msg.from, msg.data);
+      return;
+    case 'error':
+      return handleNetError(msg);
+  }
+}
+
+// ---------------------------------------------------------- guest of a player-hosted game
+function maybeStartGuestLink() {
+  const O = S.online;
+  if (!O || O.kind !== 'guest' || guestLink || !O.hostDirect || relayOnly() || !webrtcSupported()) return;
+  if (!O.hostOnline || (O.linkAttempts || 0) >= 3) return;
+  O.linkAttempts = (O.linkAttempts || 0) + 1;
+  const link = new DirectLink({
+    role: 'offer',
+    sendSignal: (s) => net?.send({ t: 'fwd', to: 'host', data: { t: 'signal', ...s } }),
+    onMessage: (m) => guestReceive(m),
+    onState: (st) => {
+      if (guestLink !== link) return;
+      if (st === 'closed') {
+        guestLink = null;
+        setTimeout(maybeStartGuestLink, 15000);
+      } else S.online.linkAttempts = 0;
+      render();
+    },
+  });
+  guestLink = link;
+}
+
+function guestReceive(data) {
+  if (!data) return;
+  if (data.t === 'signal') return guestLink?.signal(data);
+  onGameMsg(data);
+}
+
+let retryJoinTimer = null;
+function handleNetError(msg) {
+  const O = S.online;
+  if (msg.code === 'busy' && O?.kind === 'server' && O.create) {
+    toast(`${msg.error} Hosting this game in your browser instead.`, 3500);
+    const { tc, color } = O.create;
+    return startHosting({ tc, color });
+  }
+  if (msg.code === 'unknown-room' && !msg.fatal) {
+    O.waitingHost = true;
+    render();
+    clearTimeout(retryJoinTimer);
+    retryJoinTimer = setTimeout(() => S.online === O && net?.onOpen(), 3000);
+    return;
+  }
+  if (msg.fatal) {
+    const title = msg.code === 'host-moved' ? 'Game moved' : 'Game not available';
+    if (O?.kind === 'host') stopHosting(false);
+    leaveOnline();
+    showMenu();
+    modal({ title, body: esc(msg.error), actions: [{ label: 'OK', primary: true }] });
+  } else toast(msg.error);
+}
+
 function onNet(msg) {
   if (S.mode !== 'online' || !S.online) return;
-  if (msg.t === 'state') applyOnlineState(msg);
-  else if (msg.t === 'chat') addChat(msg.entries, msg.reset);
-  else if (msg.t === 'error') {
-    if (msg.fatal) {
+  const O = S.online;
+  if (O.kind === 'host') return hostOnNet(msg);
+  switch (msg.t) {
+    case 'state':
+    case 'chat':
+      O.kind ||= 'server';
+      if (O.kind === 'server') onGameMsg(msg);
+      return;
+    case 'p2p-joined':
+      Object.assign(O, { kind: 'guest', peerId: msg.peerId, hostOnline: msg.hostOnline, waitingHost: false, reportedToken: null });
+      render();
+      return;
+    case 'fwd':
+      if (O.kind === 'guest') guestReceive(msg.data);
+      return;
+    case 'host-gone':
+      O.hostOnline = false;
+      render();
+      return;
+    case 'host-back':
+      Object.assign(O, { hostOnline: true, lastSeq: null, linkAttempts: 0, reportedToken: null });
+      render();
+      return;
+    case 'room-closed':
+      guestLink?.close();
+      guestLink = null;
       leaveOnline();
       showMenu();
-      modal({ title: 'Game not found', body: esc(msg.error), actions: [{ label: 'OK', primary: true }] });
-    } else toast(msg.error);
+      modal({ title: 'Game closed', body: 'The host ended this game.', actions: [{ label: 'OK', primary: true }] });
+      return;
+    case 'error':
+      return handleNetError(msg);
   }
+}
+
+/** state/chat from whoever runs the game (server, our own hosted room, or the remote host). */
+function onGameMsg(msg) {
+  const O = S.online;
+  if (!O) return;
+  if (msg.t === 'state') {
+    // The same state can arrive twice (direct link + relay); drop stale or duplicate ones.
+    if (!msg.rejected && O.lastSeq != null && msg.gameNo === O.gameNo && msg.seq <= O.lastSeq) return;
+    O.lastSeq = msg.seq;
+    applyOnlineState(msg);
+  } else if (msg.t === 'chat') addChat(msg.entries, msg.reset);
 }
 
 function applyOnlineState(st) {
@@ -730,8 +998,19 @@ function applyOnlineState(st) {
     spectators: st.spectators,
     gameNo: st.gameNo,
     create: null,
+    waitingHost: false,
   });
-  if (st.token) saveToken(st.room, st.token);
+  if (O.kind === 'guest') {
+    O.hostDirect = !!st.direct;
+    O.hostOnline = true;
+  }
+  if (st.token) {
+    saveToken(st.room, st.token);
+    if (O.kind === 'guest' && O.reportedToken !== st.token) {
+      O.reportedToken = st.token;
+      net?.send({ t: 'peer-token', token: st.token });
+    }
+  }
   setUrlRoom(st.room);
   S.tc = st.tc;
   if (newGame || prevYou !== st.you) S.orientation = st.you || 'white';
@@ -752,23 +1031,23 @@ function applyOnlineState(st) {
   } else if (local.length < server.length && same(local, server.slice(0, local.length))) {
     for (const u of server.slice(local.length)) applyMove(parseUci(u));
     added = true;
-  } else if (!(O.pending && same(local, [...server, O.pending]))) {
-    resetTo(server);
-  }
+  } else if (O.pending && same(local, [...server, O.pending])) {
+    // Our move hasn't been confirmed. If it's been a while, it was probably lost in a reconnect: resend.
+    if (Date.now() - O.pendingAt > 2500 && st.status === 'playing') {
+      O.pendingAt = Date.now();
+      sendGame({ t: 'move', ...O.pendingMove });
+    }
+  } else resetTo(server);
   if (same(hist().map(uci), server)) O.pending = null;
 
   S.clock = st.clock ? { white: st.clock.white, black: st.clock.black, running: st.clock.running, since: Date.now(), inc: incOf(st.tc) } : null;
-  if (O.pending && S.clock) {
-    // Our move is in flight: show our clock as stopped until the server confirms.
-    S.clock.running = null;
-  }
+  if (O.pending && S.clock) S.clock.running = null; // our move is in flight: show our clock stopped
   S.over = st.status === 'over' ? st.result : null;
 
   if (O.you && !hadOpponent && O.players[opp(O.you)] && !firstSync) {
     sound.notify();
     toast(`${O.players[opp(O.you)].name} joined the game.`);
   }
-
   if (O.you && !firstSync) {
     if (O.drawOffer === opp(O.you) && prevDraw !== O.drawOffer) {
       sound.notify();
@@ -783,6 +1062,7 @@ function applyOnlineState(st) {
   syncBoard();
   render();
   if (added && !S.over && turn() === O.you) cg.playPremove();
+  if (O.kind === 'guest') maybeStartGuestLink();
 
   const key = `${st.room}:${st.gameNo}`;
   if (S.over && S.overShown !== key) {
@@ -792,17 +1072,46 @@ function applyOnlineState(st) {
   }
 }
 
+const chatSeen = new Set();
 function addChat(entries, reset) {
   const log = $('#chat-log');
-  if (reset) log.innerHTML = '';
+  if (reset) {
+    log.innerHTML = '';
+    chatSeen.clear();
+  }
+  let fresh = null;
   for (const e of entries) {
+    if (e.id != null) {
+      if (chatSeen.has(e.id)) continue;
+      chatSeen.add(e.id);
+    }
+    fresh = e;
     log.append(h('div', { class: 'chat-line' }, h('b', { class: e.color ? `c-${e.color}` : '' }, e.from + ': '), e.text));
   }
   log.scrollTop = log.scrollHeight;
-  if (entries.length && !reset) {
-    const last = entries[entries.length - 1];
-    if (S.online?.you && last.color !== S.online.you) sound.notify();
+  if (fresh && !reset && S.online?.you && fresh.color !== S.online.you) sound.notify();
+}
+
+/** One-line description of how this browser is connected to the game. */
+function connectionInfo() {
+  const O = S.online;
+  if (!O) return null;
+  const netUp = S.netStatus === 'open';
+  if (O.kind === 'server') return netUp ? { cls: 'ok', text: 'Server-hosted game' } : { cls: 'bad', text: 'Reconnecting to the server…' };
+  if (O.kind === 'host') {
+    const me = hostCtx?.room.conns.get('local');
+    const theirs = [...(hostCtx?.room.conns || [])].filter(([c, s]) => c !== 'local' && s && s !== me).map(([c]) => c);
+    if (!theirs.length) return { cls: netUp ? 'ok' : 'warn', text: netUp ? 'Hosting in your browser' : 'Hosting in your browser · reconnecting to the server…' };
+    if (theirs.some((c) => hostCtx.links.get(c)?.isOpen)) return { cls: 'ok', text: 'Hosting in your browser · direct connection' };
+    return netUp ? { cls: 'warn', text: 'Hosting in your browser · relayed via server' } : { cls: 'bad', text: 'Reconnecting to the server…' };
   }
+  if (O.kind === 'guest') {
+    if (guestLink?.isOpen) return { cls: 'ok', text: 'Player-hosted · direct connection' };
+    if (!netUp) return { cls: 'bad', text: 'Reconnecting…' };
+    if (!O.hostOnline) return { cls: 'bad', text: 'Player-hosted · host offline' };
+    return { cls: 'warn', text: guestLink ? 'Player-hosted · connecting directly…' : 'Player-hosted · relayed via server' };
+  }
+  return { cls: 'warn', text: 'Connecting…' };
 }
 
 // ------------------------------------------------------------------ rendering
@@ -932,7 +1241,11 @@ function statusText() {
   if (S.mode === 'local') return `${cap(turn())} to move${S.chess.inCheck() ? ' — check!' : ''}`;
   if (S.mode === 'online') {
     const O = S.online;
-    if (S.netStatus !== 'open') return S.netStatus === 'connecting' && !O.gameNo ? 'Connecting…' : 'Connection lost — reconnecting…';
+    // A host, or a guest with a direct link, keeps playing while the server connection is down.
+    const independent = O.kind === 'host' || (O.kind === 'guest' && guestLink?.isOpen);
+    if (!independent && S.netStatus !== 'open') return S.netStatus === 'connecting' && !O.gameNo ? 'Connecting…' : 'Connection lost — reconnecting…';
+    if (O.waitingHost) return 'Waiting for the host to come back online…';
+    if (O.kind === 'guest' && !O.hostOnline && !guestLink?.isOpen) return 'The host is offline — waiting for them to return…';
     if (!O.gameNo) return 'Connecting…';
     if (O.status === 'waiting') return 'Waiting for your friend to join…';
     if (!O.you) return `Watching · ${cap(turn())} to move`;
@@ -973,7 +1286,7 @@ function renderActions() {
     if (O.you && O.status === 'playing') {
       const theyOffer = O.drawOffer === opp(O.you);
       if (theyOffer) {
-        box.append(button('Accept draw', offerDraw, 'primary'), button('Decline', () => net?.send({ t: 'declineDraw' })));
+        box.append(button('Accept draw', offerDraw, 'primary'), button('Decline', () => sendGame({ t: 'declineDraw' })));
       } else if (n >= 2) {
         box.append(button(O.drawOffer === O.you ? 'Draw offered' : 'Offer draw', offerDraw, '', { disabled: O.drawOffer === O.you || null }));
       }
@@ -983,15 +1296,24 @@ function renderActions() {
       const theyAsk = O.rematchOffer === opp(O.you);
       const iAsked = O.rematchOffer === O.you;
       box.append(
-        button(theyAsk ? 'Accept rematch' : iAsked ? 'Rematch offered' : 'Rematch', () => net?.send({ t: 'rematch' }), 'primary', {
+        button(theyAsk ? 'Accept rematch' : iAsked ? 'Rematch offered' : 'Rematch', () => sendGame({ t: 'rematch' }), 'primary', {
           disabled: iAsked || !O.players[opp(O.you)] || null,
         }),
       );
     }
     box.append(
       button('Leave', () => {
-        leaveOnline();
-        showMenu();
+        const go = () => {
+          leaveOnline();
+          showMenu();
+        };
+        if (O.kind === 'host' && O.status !== 'over' && O.players[opp(O.you)]) {
+          modal({
+            title: 'Leave and end this game?',
+            body: '<p class="muted">The game runs in your browser, so leaving ends it for your opponent too.</p>',
+            actions: [{ label: 'End game and leave', danger: true, onClick: go }, { label: 'Stay' }],
+          });
+        } else go();
       }),
     );
   }
@@ -1015,6 +1337,13 @@ function renderGamePanel() {
   $('#g-share').hidden = !(S.mode === 'online' && O?.room && !showInvite);
   const spec = S.mode === 'online' && O?.spectators ? `${O.spectators} watching` : '';
   $('#g-spectators').textContent = spec;
+  const conn = S.mode === 'online' ? connectionInfo() : null;
+  const connEl = $('#g-conn');
+  connEl.hidden = !conn;
+  if (conn) {
+    connEl.className = `g-conn ${conn.cls}`;
+    connEl.textContent = conn.text;
+  }
   $('#chat').hidden = S.mode !== 'online';
   $('#chat-input').disabled = !(S.mode === 'online' && O?.room);
   renderActions();
@@ -1032,6 +1361,7 @@ function render() {
 function showView(name) {
   for (const v of $$('.view')) v.hidden = v.id !== `view-${name}`;
   document.body.dataset.view = name;
+  if (name === 'friend') updateHostingLine();
 }
 
 function enterGame() {
@@ -1105,7 +1435,7 @@ function showResult() {
   const actions = [];
   if (S.mode === 'bot') actions.push({ label: 'Rematch', primary: true, onClick: () => startBot({ level: S.bot.level, color: S.bot.pref || opp(S.bot.color) }) });
   if (S.mode === 'local') actions.push({ label: 'Play again', primary: true, onClick: () => startLocal({ tc: S.tc, autoFlip: S.local.autoFlip }) });
-  if (S.mode === 'online' && S.online?.you) actions.push({ label: 'Rematch', primary: true, onClick: () => net?.send({ t: 'rematch' }) });
+  if (S.mode === 'online' && S.online?.you) actions.push({ label: 'Rematch', primary: true, onClick: () => sendGame({ t: 'rematch' }) });
   actions.push({ label: 'Review game' });
   modal({
     title: resultTitle(),
@@ -1157,9 +1487,64 @@ function showSettings() {
   }
   modal({
     title: 'Settings',
-    body: h('div', {}, h('p', { class: 'settings-label' }, 'Board colors'), grid),
+    body: h('div', {}, h('p', { class: 'settings-label' }, 'Board colors'), grid, hostingSettings()),
     actions: [{ label: 'Done', primary: true }],
   });
+}
+
+// "Online games" section: who hosts new games, and whether to allow direct connections.
+function hostingSettings() {
+  const box = h('div', { class: 'hosting-settings' });
+  const opts = h('div', { class: 'opt-list', role: 'radiogroup', 'aria-label': 'Who hosts new online games' });
+  const card = (value, title, desc) =>
+    h('button', { type: 'button', class: 'opt-card', role: 'radio', 'data-value': value }, h('b', {}, title), h('small', {}, desc), h('small', { class: 'opt-note' }));
+  const player = card('player', 'Player-hosted (recommended)', 'The game runs in the browser of the player who creates it. Players connect directly when possible, so games keep going through server updates.');
+  const serverOpt = card('server', 'Server-hosted', 'The game runs on this server, so it survives page refreshes and phones going to sleep. Only offered while the server is idle.');
+  opts.append(player, serverOpt);
+  const sync = () => {
+    const cur = hostingPref();
+    for (const b of [player, serverOpt]) {
+      const on = b.dataset.value === cur;
+      b.classList.toggle('selected', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+    updateHostingLine();
+  };
+  opts.addEventListener('click', (e) => {
+    const b = e.target.closest('.opt-card');
+    if (!b || b.disabled) return;
+    store.set('cp.hosting', b.dataset.value);
+    sync();
+  });
+  const note = $('.opt-note', serverOpt);
+  note.textContent = 'Checking availability…';
+  serverOpt.disabled = true;
+  fetchHostingStatus().then((st) => {
+    serverOpt.disabled = !st.available;
+    note.textContent = st.available ? 'Available now.' : `Unavailable: ${st.reason}`;
+    note.classList.toggle('bad', !st.available);
+    if (!st.available && hostingPref() === 'server') note.textContent += ' New games will be player-hosted for now.';
+  });
+  const relay = h('input', { type: 'checkbox', id: 'relay-only' });
+  relay.checked = relayOnly();
+  relay.onchange = () => {
+    store.set('cp.relayOnly', relay.checked);
+    updateHostingLine();
+  };
+  box.append(
+    h('p', { class: 'settings-label' }, 'Online games'),
+    opts,
+    h('label', { class: 'toggle settings-toggle' }, relay, h('span', {}, h('b', {}, 'Hide my IP address'), h('small', {}, 'Send all game traffic through this server instead of connecting directly to the other player. They won\u2019t see your IP address; moves may arrive a little slower.'))),
+  );
+  sync();
+  return box;
+}
+
+function updateHostingLine() {
+  const el = $('#hosting-line-text');
+  if (!el) return;
+  const how = hostingPref() === 'server' ? 'Server-hosted' : 'Player-hosted (runs in your browser)';
+  el.textContent = `${how}${relayOnly() ? ' · IP hidden' : ''}`;
 }
 
 // ------------------------------------------------------------------ setup forms
@@ -1199,6 +1584,8 @@ function initSetup() {
   tcGrid($('#friend-tc'), prefs.friendTc || '10+0');
   $('#local-flip').checked = !!prefs.autoFlip;
   $('#friend-name').value = myName();
+  updateHostingLine();
+  $('#hosting-change').onclick = showSettings;
 
   const savePrefs = (p) => store.set('cp.prefs', { ...store.get('cp.prefs', {}), ...p });
 
@@ -1230,6 +1617,15 @@ function initSetup() {
 }
 
 // ------------------------------------------------------------------ wiring
+function pruneHostedSaves() {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k?.startsWith('cp.host.') && Date.now() - (store.get(k)?.savedAt || 0) > 24 * 3600 * 1000) localStorage.removeItem(k);
+    }
+  } catch {}
+}
+
 function init() {
   initSetup();
   $('#flip-btn').onclick = flip;
@@ -1255,7 +1651,7 @@ function init() {
     e.preventDefault();
     const inp = $('#chat-input');
     const text = inp.value.trim();
-    if (text && net?.send({ t: 'chat', text })) inp.value = '';
+    if (text && sendGame({ t: 'chat', text })) inp.value = '';
   };
   $('#modal-close').onclick = closeModal;
   $('#modal').addEventListener('click', (e) => {
@@ -1276,8 +1672,14 @@ function init() {
     e.preventDefault();
   });
 
+  pruneHostedSaves();
   const room = new URLSearchParams(location.search).get('room');
-  if (room && /^[A-Za-z0-9]{4,16}$/.test(room)) {
+  const hosted = room && store.get(`cp.host.${room}`);
+  if (hosted) {
+    S.mode = 'online';
+    newGameState();
+    startHosting({}, hosted);
+  } else if (room && /^[A-Za-z0-9]{4,16}$/.test(room)) {
     if (tokens()[room]) joinOnline(room);
     else {
       showMenu();

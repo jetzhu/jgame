@@ -1,62 +1,19 @@
 // Integration tests: start server.js on a random port and drive it over HTTP + WebSocket.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import WebSocket from 'ws';
+import { startServer, makeClient, sleep } from './helpers.js';
 
-const dir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-let proc;
+let srv;
+let client;
 let base;
 
 before(async () => {
-  proc = spawn(process.execPath, ['server.js'], { cwd: dir, env: { ...process.env, HOST: '127.0.0.1', PORT: '0' } });
-  base = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('server did not start')), 5000);
-    proc.stdout.on('data', (d) => {
-      const m = String(d).match(/http:\/\/([\d.]+:\d+)/);
-      if (m) {
-        clearTimeout(timer);
-        resolve(m[1]);
-      }
-    });
-    proc.on('exit', (code) => reject(new Error(`server exited (${code})`)));
-  });
+  srv = await startServer({ SERVER_HOSTING: 'on' });
+  base = srv.base;
+  client = () => makeClient(base);
 });
 
-after(() => proc?.kill());
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// A client that remembers the latest state message and can wait for a matching one.
-function client() {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://${base}/ws`);
-    ws.states = [];
-    ws.errors = [];
-    ws.chats = [];
-    ws.on('message', (d) => {
-      const m = JSON.parse(d);
-      if (m.t === 'state') ws.states.push(m);
-      if (m.t === 'error') ws.errors.push(m);
-      if (m.t === 'chat') ws.chats.push(...m.entries);
-    });
-    ws.cmd = (msg) => ws.send(JSON.stringify(msg));
-    ws.last = () => ws.states[ws.states.length - 1];
-    ws.until = async (pred, ms = 2000) => {
-      const end = Date.now() + ms;
-      while (Date.now() < end) {
-        const s = ws.last();
-        if (s && pred(s)) return s;
-        await sleep(10);
-      }
-      throw new Error(`timed out; last state: ${JSON.stringify(ws.last())}`);
-    };
-    ws.on('open', () => resolve(ws));
-    ws.on('error', reject);
-  });
-}
+after(() => srv?.stop());
 
 async function newGame(tc = 'none') {
   const a = await client();
