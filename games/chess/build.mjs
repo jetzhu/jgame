@@ -34,6 +34,27 @@ const pieces = fs.readFileSync(nm('chessground/assets/chessground.cburnett.css')
 const extra = pieces.replaceAll('.cg-wrap piece.', '.pc.');
 fs.writeFileSync(out('vendor/board.css'), `${base}\n${pieces}\n${extra}\n`);
 
+// Opening names: position (FEN without move counters) -> "ECO Name". Source: data/openings.tsv (CC0).
+{
+  const { Chess } = await import('chess.js');
+  const map = {};
+  const lines = fs.readFileSync(path.join(root, 'data/openings.tsv'), 'utf8').split('\n').slice(1);
+  for (const line of lines) {
+    const [eco, name, pgn] = line.split('\t');
+    if (!eco || !name || !pgn) continue;
+    const c = new Chess();
+    try {
+      c.loadPgn(pgn);
+    } catch {
+      continue;
+    }
+    const key = c.fen().split(' ').slice(0, 4).join(' ');
+    map[key] = `${eco} ${name}`;
+  }
+  fs.writeFileSync(out('vendor/openings.json'), JSON.stringify(map));
+  console.log('openings', Object.keys(map).length);
+}
+
 // License texts shipped with the site (BSD requires the chess.js notice to accompany the bundle).
 fs.copyFileSync(path.join(repoRoot, 'LICENSE'), out('LICENSE.txt'));
 const notice = (title, body) => `${'='.repeat(72)}\n${title}\n${'='.repeat(72)}\n\n${body.trim()}\n\n`;
@@ -71,7 +92,7 @@ execFileSync('tar', [
   '--transform', 's,^,jgame/,',
   '-C', repoRoot,
   'LICENSE',
-  ...['README.md', 'package.json', 'package-lock.json', 'build.mjs', 'server.js', 'src', 'test'].map(g),
+  ...['README.md', 'package.json', 'package-lock.json', 'build.mjs', 'server.js', 'src', 'test', 'data'].map(g),
   ...['index.html', 'about.html', 'style.css', 'favicon.svg'].map((f) => g(`public/${f}`)),
 ]);
 console.log('build ok', v);

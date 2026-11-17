@@ -8,8 +8,8 @@
   <meta name="description" content="Play chess in your browser against the computer, or with a friend, with no login.">
   <meta name="theme-color" content="#302e2b">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="vendor/board.css?v=af01a71d76">
-  <link rel="stylesheet" href="style.css?v=af01a71d76">
+  <link rel="stylesheet" href="vendor/board.css?v=9f9d3f375c">
+  <link rel="stylesheet" href="style.css?v=9f9d3f375c">
 </head>
 <body data-view="home">
   <header class="topbar">
@@ -73,6 +73,18 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
             </span>
             <span class="mi-text"><b>Play a Friend Online</b><small>Create a link, send it, play from anywhere</small></span>
+          </button>
+          <button class="menu-item" id="menu-puzzles">
+            <span class="mi-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6v3a2 2 0 1 0 0 4v3h-3a2 2 0 1 1-4 0H5V8h3a2 2 0 1 0 0-4z" transform="translate(1 3)"/></svg>
+            </span>
+            <span class="mi-text"><b>Puzzles <span class="mi-badge" id="menu-puzzles-badge" hidden></span></b><small id="menu-puzzles-label">Practice positions from your own mistakes</small></span>
+          </button>
+          <button class="menu-item" id="menu-history">
+            <span class="mi-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
+            </span>
+            <span class="mi-text"><b>My Games</b><small id="menu-history-label">Finished games, saved in this browser</small></span>
           </button>
           <button class="menu-item" data-goto="import">
             <span class="mi-icon">
@@ -141,6 +153,19 @@
         </div>
       </div>
 
+      <!-- My games -->
+      <div class="view" id="view-history" hidden>
+        <div class="panel-head"><button class="back" data-goto="home" aria-label="Back">‹</button><h2>My Games</h2></div>
+        <div class="hist-list" id="history-list"></div>
+        <p class="muted small hist-note">Saved in this browser only (your last 100 finished games). Open one to analyze it.</p>
+      </div>
+
+      <!-- Puzzles -->
+      <div class="view" id="view-puzzles" hidden>
+        <div class="panel-head"><button class="back" id="pz-back" aria-label="Back">‹</button><div><h2>Puzzles</h2><div class="g-sub" id="pz-progress"></div></div></div>
+        <div class="pz-body" id="pz-body"></div>
+      </div>
+
       <!-- Analysis import -->
       <div class="view" id="view-import" hidden>
         <div class="panel-head"><button class="back" data-goto="home" aria-label="Back">‹</button><h2>Analysis Board</h2></div>
@@ -156,7 +181,7 @@
 
       <!-- Analysis -->
       <div class="view analysis-view" id="view-analysis" hidden>
-        <div class="panel-head game-head"><div><h2 id="an-title">Analysis</h2><div class="g-sub" id="an-sub"></div></div></div>
+        <div class="panel-head game-head"><div><h2 id="an-title">Analysis</h2><div class="g-sub" id="an-sub"></div><div class="an-opening" id="an-opening" hidden></div></div></div>
         <div class="an-progress" id="an-progress" hidden><div class="an-progress-text small"></div><div class="an-progress-bar"><span></span></div></div>
         <svg class="an-graph" id="an-graph" preserveAspectRatio="none" role="img" aria-label="Evaluation graph; click to jump to a move"></svg>
         <div class="an-summary" id="an-summary" hidden></div>
@@ -229,6 +254,6 @@
   </div>
   <div class="toast" id="toast" hidden></div>
 
-  <script type="module" src="app.js?v=af01a71d76"></script>
+  <script type="module" src="app.js?v=9f9d3f375c"></script>
 </body>
 </html>

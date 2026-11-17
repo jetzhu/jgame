@@ -30,6 +30,7 @@ export const CLASSES = {
   mistake: { label: 'Mistake', glyph: '?' },
   blunder: { label: 'Blunder', glyph: '??' },
   forced: { label: 'Only move', glyph: '□' },
+  book: { label: 'Book move', glyph: '' }, // opening theory; drawn as a book icon
 };
 
 /**

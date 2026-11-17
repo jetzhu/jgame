@@ -6,6 +6,8 @@ import { Net } from './net.js';
 import { GameRoom } from './room-core.js';
 import { DirectLink, webrtcSupported, setStunServers } from './p2p.js';
 import { createAnalysis } from './analysis-view.js';
+import { createPuzzles } from './puzzle-view.js';
+import { createLibrary } from './library.js';
 
 // ------------------------------------------------------------------ constants
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -137,6 +139,10 @@ const S = {
   online: null, // {room, you, players, status, drawOffer, rematchOffer, spectators, gameNo, pending, create}
   netStatus: 'closed',
   overShown: null,
+  startFen: START_FEN, // bot games can start from any position ("Play from here")
+  gameKey: null, // identifies this game in the history
+  historyId: null,
+  hint: null, // {gen, ply, move, stage 1..3}
 };
 
 let engine = null;
@@ -182,8 +188,161 @@ const analysis = createAnalysis({
     else sound.move();
   },
   onClose: () => exitAnalysis(),
+  onReviewComplete: (...a) => onReviewComplete(...a),
+  practice: (fen) => practice(fen),
 });
-let analysisReturn = null; // {mode, orientation} to restore when the analysis closes
+let analysisReturn = null; // {mode, orientation} | {view} to restore when the analysis closes
+
+const library = createLibrary(store);
+
+const puzzles = createPuzzles({
+  cg,
+  $,
+  h,
+  library,
+  sound,
+  toast: (...a) => toast(...a),
+  askPromotion: (...a) => askPromotion(...a),
+  showView: (...a) => showView(...a),
+  setOrientation: (c) => (S.orientation = c),
+  moveSound: (m, pos) => {
+    if (pos.inCheck()) sound.check();
+    else if (m.captured) sound.capture();
+    else sound.move();
+  },
+  evalPosition,
+  onPosition: (fen) => paintPuzzleBars(fen),
+  analyzePosition: (fen, pz) => {
+    puzzles.close(false);
+    S.mode = null;
+    openAnalysis({ startFen: fen, moves: [], title: 'Puzzle position', subtitle: `${pz.badSan} was played here; best was ${pz.bestSan}`, userColor: pz.color });
+  },
+  onClose: () => {
+    S.mode = null;
+    showMenu();
+  },
+});
+
+/** Engine evaluation (white's point of view) of a position, for grading puzzle answers. */
+async function evalPosition(fen) {
+  const pos = new Chess(fen);
+  if (pos.isCheckmate()) return { mate: 0, winner: pos.turn() === 'w' ? 'black' : 'white' };
+  if (pos.isGameOver()) return { cp: 0 };
+  const r = await getEngine().search(fen, { skill: 20, depth: 12 });
+  if (!r?.info) return null;
+  const sc = r.info.type === 'mate' ? { mate: r.info.value } : { cp: r.info.value };
+  if (pos.turn() === 'w') return sc;
+  return sc.mate != null ? { mate: -sc.mate } : { cp: -sc.cp };
+}
+
+function paintPuzzleBars(fen) {
+  paintBar($('#bar-bottom'), { color: S.orientation, fen, name: 'You' });
+  paintBar($('#bar-top'), { color: opp(S.orientation), fen, name: 'Opponent' });
+}
+
+function openPuzzles() {
+  if (S.mode === 'online') leaveOnline();
+  S.mode = 'puzzle';
+  closeModal();
+  puzzles.open();
+}
+
+/** Save a finished game to "My games" (once per game). */
+function recordGame() {
+  const moves = hist().map(uci);
+  if (moves.length < 2 || !S.over || S.over.reason === 'aborted') return;
+  const userColor = S.mode === 'bot' ? opp(S.bot.color) : S.mode === 'online' ? S.online?.you || null : null;
+  if (S.mode === 'online' && !userColor) return; // spectators don't keep games
+  const result = S.over.winner === 'white' ? '1-0' : S.over.winner === 'black' ? '0-1' : '1/2-1/2';
+  S.historyId = library.addGame({
+    key: S.mode === 'online' ? `${S.online.room}:${S.online.gameNo}` : S.gameKey,
+    mode: S.mode,
+    white: barName('white'),
+    black: barName('black'),
+    userColor,
+    result,
+    reason: S.over.reason,
+    resultText: `${resultTitle()} ${REASON[S.over.reason] ?? ''}`.trim(),
+    startFen: S.startFen,
+    moves,
+    tc: S.tc,
+    level: S.mode === 'bot' ? S.bot.level : null,
+  });
+}
+
+function historyInput(g) {
+  return {
+    startFen: g.startFen || START_FEN,
+    moves: g.moves,
+    white: g.white,
+    black: g.black,
+    userColor: g.userColor,
+    title: 'Game review',
+    subtitle: `${g.white} vs ${g.black} · ${g.result.replace('1/2-1/2', '½–½')}`,
+    result: g.resultText || g.result,
+    pgnResult: g.result,
+    historyId: g.id,
+    event: g.mode === 'online' ? 'Online casual game' : g.mode === 'bot' ? 'Game vs computer' : 'Pass & play',
+  };
+}
+
+function renderHistory() {
+  const list = $('#history-list');
+  list.innerHTML = '';
+  const games = library.games();
+  if (!games.length) list.append(h('p', { class: 'muted small hist-empty' }, 'Your finished games will appear here, ready to analyze.'));
+  for (const g of games) {
+    let outcome = g.result === '1/2-1/2' ? 'Draw' : g.result;
+    let cls = 'draw';
+    if (g.userColor && g.result !== '1/2-1/2') {
+      const won = (g.result === '1-0') === (g.userColor === 'white');
+      outcome = won ? 'Won' : 'Lost';
+      cls = won ? 'won' : 'lost';
+    }
+    const acc = g.analysis?.accuracy && g.userColor ? g.analysis.accuracy[g.userColor] : null;
+    const meta = [new Date(g.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }), `${Math.ceil(g.moves.length / 2)} moves`, g.mode === 'bot' ? 'vs computer' : g.mode === 'online' ? 'online' : 'pass & play'];
+    if (acc != null) meta.push(`accuracy ${acc.toFixed(0)}%`);
+    list.append(
+      h('div', { class: 'hist-row' },
+        h('button', { class: 'hist-main', onclick: () => {
+          analysisReturn = { view: 'history' };
+          S.mode = 'analysis';
+          analysis.open(historyInput(g));
+        } },
+          h('span', { class: `hist-res ${cls}` }, outcome),
+          h('span', { class: 'hist-text' }, h('b', {}, `${g.white} vs ${g.black}`), h('small', {}, meta.join(' · '))),
+        ),
+        h('button', { class: 'hist-del', title: 'Delete this game', 'aria-label': 'Delete this game', onclick: () => {
+          library.removeGame(g.id);
+          renderHistory();
+          toast('Game deleted.');
+        } }, '×'),
+      ),
+    );
+  }
+}
+
+/** Analysis finished: remember accuracy for the history list, and turn your mistakes into puzzles. */
+function onReviewComplete({ input, accuracy, mistakes, opening }) {
+  if (input.historyId) library.updateGame(input.historyId, { analysis: { accuracy, opening } });
+  if (!input.userColor) return;
+  const title = (input.subtitle || '').split(' · ')[0];
+  const mine = mistakes.filter((m) => m.color === input.userColor).map((m) => ({ ...m, gameId: input.historyId || null, gameTitle: title }));
+  const n = library.addPuzzles(mine);
+  if (n) toast(`Added ${n} puzzle${n > 1 ? 's' : ''} from your mistakes. Practice them under Puzzles.`, 4000);
+}
+
+/** "Play from here": practice the analysis position against the computer. */
+function practice(fen) {
+  const pos = new Chess(fen);
+  if (pos.isGameOver()) return toast('The game is already over in this position.');
+  const level = store.get('cp.prefs', {})?.level || 4;
+  analysis.close(false);
+  analysisReturn = null;
+  if (S.online) leaveOnline();
+  startBot({ level, color: colorName(pos.turn()), startFen: fen });
+  toast(`Practicing this position against the computer (Level ${level}).`, 3000);
+}
 
 function openAnalysis(input) {
   if (S.mode !== 'analysis') analysisReturn = S.mode ? { mode: S.mode, orientation: S.orientation } : null;
@@ -201,7 +360,12 @@ function openAnalysis(input) {
 function exitAnalysis() {
   const back = analysisReturn;
   analysisReturn = null;
-  if (back) {
+  if (back?.view === 'history') {
+    S.mode = null;
+    showMenu();
+    showView('history');
+    renderHistory();
+  } else if (back) {
     S.mode = back.mode;
     S.orientation = back.orientation;
     enterGame();
@@ -216,8 +380,10 @@ function analyzeCurrent() {
   const white = barName('white');
   const black = barName('black');
   const pgnResult = S.over ? (S.over.winner === 'white' ? '1-0' : S.over.winner === 'black' ? '0-1' : S.over.reason === 'aborted' ? '*' : '1/2-1/2') : '*';
+  if (S.over && !S.historyId) recordGame();
   openAnalysis({
-    startFen: START_FEN,
+    startFen: S.startFen,
+    historyId: S.historyId,
     moves: hist().map(uci),
     white,
     black,
@@ -279,7 +445,7 @@ function controlColor() {
 }
 
 function syncBoard() {
-  if (S.mode === 'analysis') return;
+  if (S.mode === 'analysis' || S.mode === 'puzzle') return;
   const h = hist();
   const ply = S.viewPly ?? h.length;
   const live = ply === h.length;
@@ -301,6 +467,7 @@ function syncBoard() {
 
 function onUserMove(orig, dest, meta) {
   if (S.mode === 'analysis') return analysis.onBoardMove(orig, dest);
+  if (S.mode === 'puzzle') return puzzles.onBoardMove(orig, dest);
   const piece = S.chess.get(orig);
   if (piece?.type === 'p' && (dest[1] === '8' || dest[1] === '1')) {
     if (meta?.premove) return userMove(orig, dest, 'q');
@@ -361,9 +528,9 @@ function applyMove(mv, { silent = false } = {}) {
   return m;
 }
 
-function resetTo(uciMoves) {
-  S.chess = new Chess();
-  S.fens = [START_FEN];
+function resetTo(uciMoves, startFen = S.startFen) {
+  S.chess = new Chess(startFen);
+  S.fens = [startFen];
   S.viewPly = null;
   for (const u of uciMoves) {
     const m = S.chess.move(parseUci(u));
@@ -425,18 +592,23 @@ function finish(result, { silent = false } = {}) {
     S.bot.thinking = false;
   }
   if (!silent) sound.end();
+  recordGame();
   syncBoard();
   render();
   save();
   showResult();
 }
 
-function newGameState() {
+function newGameState(startFen = START_FEN) {
   S.gen++;
   engine?.stop();
   S.bot.thinking = false;
-  S.chess = new Chess();
-  S.fens = [START_FEN];
+  S.startFen = startFen;
+  S.chess = new Chess(startFen);
+  S.fens = [startFen];
+  S.gameKey = Math.random().toString(36).slice(2);
+  S.historyId = null;
+  S.hint = null;
   S.viewPly = null;
   S.over = null;
   cg.cancelPremove();
@@ -546,19 +718,40 @@ async function maybeBotMove() {
   if (!S.over) cg.playPremove();
 }
 
+// Hints come in three steps: which piece, then where it goes, then the full move.
 async function hint() {
   if (S.mode !== 'bot' || S.over || turn() === S.bot.color) return;
   const gen = S.gen;
   const ply = S.chess.history().length;
-  toast('Looking for a good move…', 1200);
-  try {
-    const r = await getEngine().search(S.chess.fen(), { skill: 20, depth: 14 });
-    if (gen !== S.gen || ply !== S.chess.history().length || !r.move) return;
-    const m = parseUci(r.move);
-    cg.setAutoShapes([{ orig: m.from, dest: m.to, brush: 'green' }]);
-  } catch {
-    toast('Engine unavailable.');
+  if (!S.hint || S.hint.gen !== gen || S.hint.ply !== ply) {
+    toast('Looking for a good move…', 1200);
+    try {
+      const r = await getEngine().search(S.chess.fen(), { skill: 20, depth: 14 });
+      if (gen !== S.gen || ply !== S.chess.history().length || !r.move) return;
+      S.hint = { gen, ply, move: r.move, stage: 0 };
+    } catch {
+      return toast('Engine unavailable.');
+    }
   }
+  const H = S.hint;
+  H.stage = Math.min(3, H.stage + 1);
+  const m = parseUci(H.move);
+  const piece = ROLE[S.chess.get(m.from)?.type] || 'piece';
+  if (H.stage === 1) {
+    cg.setAutoShapes([{ orig: m.from, brush: 'green' }]);
+    toast(`Hint: move your ${piece} on ${m.from}.`, 3000);
+  } else if (H.stage === 2) {
+    cg.setAutoShapes([{ orig: m.from, brush: 'green' }, { orig: m.to, brush: 'green' }]);
+    toast(`Hint: your ${piece} goes to ${m.to}.`, 3000);
+  } else {
+    cg.setAutoShapes([{ orig: m.from, dest: m.to, brush: 'green' }]);
+    let san = H.move;
+    try {
+      san = new Chess(S.chess.fen()).move(m).san;
+    } catch {}
+    toast(`Best move: ${san}`, 3000);
+  }
+  renderActions();
 }
 
 // ------------------------------------------------------------------ actions
@@ -640,7 +833,11 @@ function goto(ply) {
 }
 
 function pgn() {
-  const c = new Chess();
+  const c = new Chess(S.startFen);
+  if (S.startFen !== START_FEN) {
+    c.setHeader('SetUp', '1');
+    c.setHeader('FEN', S.startFen);
+  }
   const names = { white: barName('white'), black: barName('black') };
   c.setHeader('Event', S.mode === 'online' ? 'Online casual game' : S.mode === 'bot' ? 'Game vs computer' : 'Pass & play');
   c.setHeader('Site', location.host || 'Chess Playground');
@@ -679,6 +876,8 @@ function save() {
   store.set('cp.saved', {
     mode: S.mode,
     moves: hist().map(uci),
+    startFen: S.startFen,
+    gameKey: S.gameKey,
     bot: { color: S.bot.color, level: S.bot.level },
     local: S.local,
     tc: S.tc,
@@ -691,7 +890,8 @@ function save() {
 
 function resume(saved) {
   S.mode = saved.mode;
-  newGameState();
+  newGameState(saved.startFen || START_FEN);
+  if (saved.gameKey) S.gameKey = saved.gameKey;
   S.bot = { ...S.bot, ...saved.bot, thinking: false };
   S.local = saved.local || { autoFlip: false };
   S.tc = saved.tc || 'none';
@@ -706,10 +906,10 @@ function resume(saved) {
 }
 
 // ------------------------------------------------------------------ starting games
-function startBot({ level, color }) {
+function startBot({ level, color, startFen = START_FEN }) {
   const user = color === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : color;
   S.mode = 'bot';
-  newGameState();
+  newGameState(startFen);
   S.bot = { color: opp(user), level, thinking: false, pref: color };
   S.orientation = user;
   S.tc = 'none';
@@ -1264,6 +1464,7 @@ function applyOnlineState(st) {
   const key = `${st.room}:${st.gameNo}`;
   if (S.over && S.overShown !== key) {
     S.overShown = key;
+    recordGame();
     if (!firstSync) sound.end();
     showResult();
   }
@@ -1388,7 +1589,7 @@ function renderPlayers() {
 }
 
 function renderClocks() {
-  if (S.mode === 'analysis') return;
+  if (S.mode === 'analysis' || S.mode === 'puzzle') return;
   for (const bar of [$('#bar-top'), $('#bar-bottom')]) {
     const clk = $('.p-clock', bar);
     if (!S.clock) {
@@ -1474,6 +1675,12 @@ function button(label, onclick, cls = '', attrs = {}) {
   return h('button', { class: `btn ${cls}`, onclick, ...attrs }, label);
 }
 
+function hintLabel() {
+  const H = S.hint;
+  if (!H || H.gen !== S.gen || H.ply !== S.chess.history().length) return 'Hint';
+  return H.stage >= 3 ? 'Hint shown' : `More hint (${H.stage + 1}/3)`;
+}
+
 function renderActions() {
   const box = $('#actions');
   box.innerHTML = '';
@@ -1482,12 +1689,12 @@ function renderActions() {
   if (S.mode === 'bot') {
     if (!over) {
       box.append(
-        button('Hint', hint, '', { disabled: turn() === S.bot.color || null }),
+        button(hintLabel(), hint, '', { disabled: turn() === S.bot.color || S.hint?.stage === 3 && S.hint.ply === S.chess.history().length || null }),
         button('Takeback', takeback, '', { disabled: !hist().some((m) => colorName(m.color) !== S.bot.color) || null }),
         button('Resign', resign, 'danger'),
       );
     } else {
-      box.append(button('Rematch', () => startBot({ level: S.bot.level, color: S.bot.pref || opp(S.bot.color) }), 'primary'));
+      box.append(button('Rematch', () => startBot({ level: S.bot.level, color: S.bot.pref || opp(S.bot.color), startFen: S.startFen }), 'primary'));
     }
     if (over) box.append(button('Analyze', analyzeCurrent));
     box.append(button('New game', showMenu));
@@ -1570,7 +1777,7 @@ function renderGamePanel() {
 }
 
 function render() {
-  if (!S.mode || S.mode === 'analysis') return;
+  if (!S.mode || S.mode === 'analysis' || S.mode === 'puzzle') return;
   renderPlayers();
   renderMoves();
   renderGamePanel();
@@ -1603,7 +1810,9 @@ function showMenu() {
     S.bot.thinking = false;
   }
   if (S.mode === 'online') leaveOnline();
+  if (puzzles.isOpen()) puzzles.close(false);
   S.mode = null;
+  S.startFen = START_FEN;
   S.chess = new Chess();
   S.fens = [START_FEN];
   S.viewPly = null;
@@ -1621,6 +1830,13 @@ function showMenu() {
       saved.mode === 'bot' ? `vs Computer (Level ${saved.bot.level}) · move ${Math.ceil(saved.moves.length / 2)}` : `Pass & Play · move ${Math.ceil(saved.moves.length / 2)}`;
     cont.onclick = () => resume(saved);
   } else cont.hidden = true;
+  const due = library.due().length;
+  const total = library.puzzles().length;
+  $('#menu-puzzles-label').textContent = total ? `${due} due now · ${total} in your set` : 'Practice positions from your own mistakes';
+  $('#menu-puzzles-badge').textContent = due || '';
+  $('#menu-puzzles-badge').hidden = !due;
+  const games = library.games().length;
+  $('#menu-history-label').textContent = games ? `${games} saved game${games === 1 ? '' : 's'} · analyze any of them` : 'Finished games, saved in this browser';
   showView('home');
 }
 
@@ -1658,7 +1874,7 @@ function confirmBox(text, okLabel, onOk) {
 function showResult() {
   const reason = REASON[S.over.reason] ?? S.over.reason;
   const actions = [];
-  if (S.mode === 'bot') actions.push({ label: 'Rematch', primary: true, onClick: () => startBot({ level: S.bot.level, color: S.bot.pref || opp(S.bot.color) }) });
+  if (S.mode === 'bot') actions.push({ label: 'Rematch', primary: true, onClick: () => startBot({ level: S.bot.level, color: S.bot.pref || opp(S.bot.color), startFen: S.startFen }) });
   if (S.mode === 'local') actions.push({ label: 'Play again', primary: true, onClick: () => startLocal({ tc: S.tc, autoFlip: S.local.autoFlip }) });
   if (S.mode === 'online' && S.online?.you) actions.push({ label: 'Rematch', primary: true, onClick: () => sendGame({ t: 'rematch' }) });
   actions.push({ label: 'Analyze game', onClick: analyzeCurrent });
@@ -1855,7 +2071,14 @@ function pruneHostedSaves() {
 function init() {
   fetchHostingStatus(); // also picks up which STUN servers to use
   initSetup();
-  $('#flip-btn').onclick = () => (S.mode === 'analysis' ? analysis.flip() : flip());
+  $('#flip-btn').onclick = () => {
+    if (S.mode === 'analysis') return analysis.flip();
+    if (S.mode === 'puzzle') {
+      S.orientation = opp(S.orientation);
+      return cg.set({ orientation: S.orientation });
+    }
+    flip();
+  };
   $('#sound-btn').onclick = () => {
     sound.enabled = !sound.enabled;
     $('#sound-btn').classList.toggle('off', !sound.enabled);
@@ -1867,6 +2090,12 @@ function init() {
   $('#an-next').onclick = () => analysis.nav.next();
   $('#an-last').onclick = () => analysis.nav.last();
   $('#import-go').onclick = () => analyzeImported($('#import-text').value);
+  $('#menu-puzzles').onclick = openPuzzles;
+  $('#menu-history').onclick = () => {
+    showView('history');
+    renderHistory();
+  };
+  $('#pz-back').onclick = () => puzzles.close(true);
   $('#import-empty').onclick = () => analyzeImported('');
   $('#settings-btn').onclick = showSettings;
   $('#nav-first').onclick = () => goto(0);
@@ -1898,6 +2127,7 @@ function init() {
       if (analysis.onKey(e)) e.preventDefault();
       return;
     }
+    if (S.mode === 'puzzle') return;
     if (!S.mode) return;
     const cur = S.viewPly ?? S.chess.history().length;
     if (e.key === 'ArrowLeft') goto(cur - 1);

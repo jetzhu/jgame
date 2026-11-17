@@ -404,6 +404,11 @@ body[data-view="analysis"] .board-col { margin-left: calc(var(--evalbar-w) + 6px
 .an-lines-off { margin: 4px 0; }
 .an-moves { min-height: 120px; }
 .mv .nag { margin-left: 3px; font-weight: 800; font-size: .8rem; }
+.nag-book { display: inline-flex; vertical-align: -1px; }
+.nag-dot svg { width: 11px; height: 11px; color: #fff; }
+.an-opening { font-size: .8rem; color: #c8b08f; margin-top: 3px; }
+.an-reason { font-size: .88rem; margin: 6px 0 2px; line-height: 1.4; }
+.an-depth { margin: 6px 0 0; }
 .mv-empty { color: var(--muted); padding-left: 8px; }
 .variation {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px;
@@ -412,6 +417,30 @@ body[data-view="analysis"] .board-col { margin-left: calc(var(--evalbar-w) + 6px
 .mv.vmv { font-weight: 500; font-size: .86rem; padding: 2px 5px; }
 .var-close { border: 0; background: none; color: var(--muted); font-size: 1.1rem; line-height: 1; padding: 0 4px; margin-left: auto; }
 .var-close:hover { color: var(--text); }
+
+/* history + puzzles */
+.mi-badge { display: inline-block; min-width: 20px; padding: 0 6px; margin-left: 4px; border-radius: 99px; background: var(--green); color: #fff; font-size: .75rem; text-align: center; vertical-align: 2px; }
+.hist-list { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 8px; }
+.hist-row { display: flex; align-items: stretch; gap: 4px; }
+.hist-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 6px; background: var(--raise); padding: 8px 10px; text-align: left; }
+.hist-main:hover { background: var(--raise-hover); }
+.hist-res { flex: none; width: 46px; text-align: center; font-weight: 800; font-size: .8rem; border-radius: 4px; padding: 3px 0; background: #ffffff14; }
+.hist-res.won { background: #3f5a2c; color: #b6e08c; }
+.hist-res.lost { background: #5a2c2a; color: #f0a29c; }
+.hist-text { display: flex; flex-direction: column; min-width: 0; }
+.hist-text b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-text small { color: var(--muted); font-size: .78rem; }
+.hist-del { flex: none; width: 30px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 1.2rem; }
+.hist-del:hover { background: #5a2c2a; color: #fff; }
+.hist-note { padding: 0 16px 16px; margin: 4px 0 0; }
+.hist-empty { padding: 8px 0; }
+.pz-body { padding: 0 16px 16px; }
+.pz-card { background: var(--panel-2); border-radius: 6px; padding: 12px; }
+.pz-card p { margin: 6px 0 0; }
+.pz-task { font-size: 1.05rem; }
+.pz-verdict { font-weight: 700; }
+.pz-btns { margin-top: 12px; }
+body[data-view="puzzles"] #pgn-btn, body[data-view="history"] #pgn-btn, body[data-view="import"] #pgn-btn { display: none; }
 
 /* ---------- modal & toast */
 .modal { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: #000a; }

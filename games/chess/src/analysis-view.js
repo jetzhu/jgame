@@ -4,10 +4,12 @@
 // main.js owns the board and app shell; it hands us what we need through `ctx`.
 import { Chess } from 'chess.js';
 import { GamePass, LiveAnalyzer, CLASSES, classifyMove, formatScore, winPct } from './analysis.js';
+import { explainMove, genericReason } from './explain.js';
 
 const ENGINE_URL = 'vendor/stockfish-19-lite-single.js';
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 const PASS_DEPTH = 12; // per position in the whole-game pass
+const DEEP_DEPTH = 16; // "Deeper review"
 const LIVE_DEPTH = 22; // live analysis stops here to save battery
 const MIN_EXPLORE_DEPTH = 12; // live depth needed before we grade an exploration move
 const BAD = new Set(['inaccuracy', 'mistake', 'blunder']);
@@ -19,7 +21,17 @@ const CLASS_COLOR = {
   mistake: '#e88a3c',
   blunder: '#d9473b',
   forced: '#8b8987',
+  book: '#a88865',
 };
+const BOOK_SVG = '<svg viewBox="0 0 20 20" width="1em" height="1em" aria-hidden="true"><path fill="currentColor" d="M3 4.5C5.5 3.3 8 3.4 10 5c2-1.6 4.5-1.7 7-.5v11c-2.5-1.2-5-1.1-7 .5-2-1.6-4.5-1.7-7-.5z"/><path d="M10 5v11" stroke="#262421" stroke-width="1.2"/></svg>';
+
+// Opening names (position -> "ECO Name"), loaded once on first use.
+let openingsPromise = null;
+const loadOpenings = () =>
+  (openingsPromise ||= fetch('vendor/openings.json')
+    .then((r) => (r.ok ? r.json() : {}))
+    .catch(() => ({})));
+const epd = (fen) => fen.split(' ').slice(0, 4).join(' ');
 
 const parseUci = (s) => ({ from: s.slice(0, 2), to: s.slice(2, 4), promotion: s[4] || undefined });
 const colorName = (c) => (c === 'w' ? 'white' : 'black');
@@ -90,6 +102,7 @@ export function createAnalysis(ctx) {
 
   /** Classification of mainline move i (uses the stable whole-game pass results). */
   function mainClass(i) {
+    if (i < A.book) return { cls: 'book', drop: 0, accuracy: null };
     if (!A.evals[i] || !A.evals[i + 1]) return null;
     return classifyMove({ before: A.evals[i], after: A.evals[i + 1], mover: A.main[i].color, played: A.main[i].uci, legalCount: A.legal[i] });
   }
@@ -134,11 +147,29 @@ export function createAnalysis(ctx) {
       legal.push(chess.moves().length);
     }
     const key = hashKey(startFen + '|' + main.map((m) => m.uci).join(' '));
-    A = { input, key, main, fens, legal, evals: new Array(fens.length), explore: null, ply: 0, ex: 0, live: null, retry: null, mistakeIdx: -1, passDone: 0 };
+    A = { input, key, main, fens, legal, evals: new Array(fens.length), explore: null, ply: 0, ex: 0, live: null, retry: null, mistakeIdx: -1, passDone: 0, book: 0, opening: '', passDepth: PASS_DEPTH, reported: false };
+    loadOpenings().then((book) => {
+      if (!A || A.key !== key) return;
+      // Book moves: the unbroken run of known opening positions from the start.
+      let n = 0;
+      while (n < main.length && book[epd(fens[n + 1])]) n++;
+      A.book = fens[0] === START_FEN ? n : 0;
+      for (let i = main.length; i >= 1; i--) {
+        if (book[epd(fens[i])]) {
+          A.opening = book[epd(fens[i])];
+          break;
+        }
+      }
+      movesKey = summaryKey = infoKey = '';
+      renderOpening();
+      render();
+      cg.setAutoShapes(shapes());
+    });
     setOrientation(input.userColor || 'white');
 
     // Reuse a previous pass of this game if we have one.
     const saved = (store.get('cp.anCache', []) || []).find((c) => c.key === key);
+    if (saved?.depth) A.passDepth = saved.depth;
     fens.forEach((fen, i) => {
       const t = terminalEval(new Chess(fen));
       if (t) A.evals[i] = t;
@@ -146,40 +177,97 @@ export function createAnalysis(ctx) {
       if (A.evals[i]) remember(fen, A.evals[i]);
     });
     A.passDone = A.evals.filter(Boolean).length;
-    const jobs = fens.map((fen, i) => ({ key: i, fen })).filter((j) => !A.evals[j.key]);
-    if (jobs.length) {
-      pass = new GamePass(ENGINE_URL, { depth: PASS_DEPTH });
-      pass.onError = () => toast('The analysis engine failed to load.');
-      pass.run(
-        jobs,
-        (i, r) => {
-          if (!A) return;
-          A.evals[i] = r;
-          A.passDone++;
-          remember(fens[i], r);
-          queueRender();
-        },
-        () => {
-          if (!A) return;
-          savePass();
-          queueRender();
-        },
-      );
-    }
+    runPass(A.passDepth);
     live = new LiveAnalyzer(ENGINE_URL, { multipv: 3, maxDepth: LIVE_DEPTH, onUpdate: onLive });
     movesKey = '';
     ctx.showView('analysis');
     $('#an-title').textContent = input.title || 'Analysis';
     $('#an-sub').textContent = input.subtitle || '';
+    renderOpening();
     summaryKey = infoKey = '';
     renderActions();
     goto(0, 0);
   }
 
+  /** Whole-game pass for every position not analyzed yet (or all of them at a new depth). */
+  function runPass(depth) {
+    pass?.destroy();
+    pass = null;
+    const fens = A.fens;
+    const jobs = fens.map((fen, i) => ({ key: i, fen })).filter((j) => !A.evals[j.key]);
+    if (!jobs.length) return reportComplete();
+    pass = new GamePass(ENGINE_URL, { depth });
+    pass.onError = () => toast('The analysis engine failed to load.');
+    pass.run(
+      jobs,
+      (i, r) => {
+        if (!A) return;
+        A.evals[i] = r;
+        A.passDone++;
+        remember(fens[i], r);
+        queueRender();
+      },
+      () => {
+        if (!A) return;
+        savePass();
+        reportComplete();
+        queueRender();
+      },
+    );
+  }
+
+  function deeper() {
+    if (!A || A.passDepth >= DEEP_DEPTH) return;
+    A.passDepth = DEEP_DEPTH;
+    A.reported = false;
+    A.evals = A.fens.map((fen) => terminalEval(new Chess(fen)) || undefined);
+    A.passDone = A.evals.filter(Boolean).length;
+    movesKey = summaryKey = infoKey = '';
+    renderActions();
+    runPass(DEEP_DEPTH);
+    render();
+  }
+
+  /** Tell main.js the review is complete (history accuracy, puzzles from mistakes). */
+  function reportComplete() {
+    if (!A || A.reported || !passComplete()) return;
+    A.reported = true;
+    // Opening names may still be loading; book moves shouldn't become puzzles, so wait for them.
+    loadOpenings().then(() => {
+      if (!A) return;
+      const s = stats();
+      const mistakes = [];
+      for (let i = 0; i < A.main.length; i++) {
+        const c = mainClass(i);
+        if (!c || (c.cls !== 'mistake' && c.cls !== 'blunder') || !A.evals[i]?.best) continue;
+        mistakes.push({
+          fen: A.fens[i],
+          bad: A.main[i].uci,
+          badSan: A.main[i].san,
+          best: A.evals[i].best,
+          bestSan: sanOf(A.fens[i], A.evals[i].best),
+          score: A.evals[i].score,
+          color: A.main[i].color,
+          cls: c.cls,
+          reason: reasonFor(i),
+        });
+      }
+      ctx.onReviewComplete?.({ input: A.input, accuracy: { white: s.white.accuracy, black: s.black.accuracy }, mistakes, opening: A.opening });
+    });
+  }
+
+  function reasonFor(i) {
+    const c = mainClass(i);
+    if (!c || !BAD.has(c.cls)) return null;
+    const before = A.evals[i];
+    const bestSan = before?.best ? sanOf(A.fens[i], before.best) : null;
+    return explainMove({ fenBefore: A.fens[i], played: A.main[i].uci, before, after: A.evals[i + 1], mover: A.main[i].color }) || genericReason(c.cls, bestSan);
+  }
+
   function savePass() {
     if (!passComplete()) return;
     const list = (store.get('cp.anCache', []) || []).filter((c) => c.key !== A.key);
-    list.unshift({ key: A.key, evals: A.evals.map((e) => ({ score: e.score, best: e.best, pv: (e.pv || []).slice(0, 6), depth: e.depth })) });
+    list.unshift({ key: A.key, depth: A.passDepth, evals: A.evals.map((e) => ({ score: e.score, best: e.best, pv: (e.pv || []).slice(0, 6), depth: e.depth })) });
     store.set('cp.anCache', list.slice(0, 8));
   }
 
@@ -373,6 +461,8 @@ export function createAnalysis(ctx) {
   }
 
   function badgeSvg(cls) {
+    if (cls === 'book')
+      return `<g transform="translate(84 16)"><circle r="15" fill="${CLASS_COLOR.book}" stroke="#fff" stroke-width="2.5"/><path transform="translate(-9 -9) scale(0.9)" fill="#fff" d="M3 4.5C5.5 3.3 8 3.4 10 5c2-1.6 4.5-1.7 7-.5v11c-2.5-1.2-5-1.1-7 .5-2-1.6-4.5-1.7-7-.5z"/></g>`;
     const g = CLASSES[cls].glyph;
     const fs = g.length > 1 ? 15 : 19;
     // chessground places custom SVGs at the square's top-left corner (100 units = 1 square)
@@ -423,6 +513,12 @@ export function createAnalysis(ctx) {
 
   const nameOf = (color) => (color === 'white' ? A.input.white : A.input.black) || cap(color);
 
+  function renderOpening() {
+    const el = $('#an-opening');
+    el.textContent = A?.opening ? A.opening.replace(/^([A-E]\d\d) (.*)$/, '$2 ($1)') : '';
+    el.hidden = !A?.opening;
+  }
+
   function renderEvalBar() {
     const bar = $('#evalbar');
     bar.hidden = !showEngine();
@@ -453,7 +549,7 @@ export function createAnalysis(ctx) {
       const c = mainClass(i);
       if (!c) continue;
       const side = s[A.main[i].color];
-      side.acc.push(c.accuracy);
+      if (c.accuracy != null) side.acc.push(c.accuracy);
       side.counts[c.cls] = (side.counts[c.cls] || 0) + 1;
     }
     for (const side of Object.values(s)) side.accuracy = side.acc.length ? side.acc.reduce((a, b) => a + b, 0) / side.acc.length : null;
@@ -469,7 +565,7 @@ export function createAnalysis(ctx) {
     summaryKey = A.key;
     const s = stats();
     const row = (cls) =>
-      `<tr><td><span class="nag-dot" style="background:${CLASS_COLOR[cls]}">${CLASSES[cls].glyph}</span>${CLASSES[cls].label}</td><td>${s.white.counts[cls] || 0}</td><td>${s.black.counts[cls] || 0}</td></tr>`;
+      `<tr><td><span class="nag-dot" style="background:${CLASS_COLOR[cls]}">${cls === 'book' ? BOOK_SVG : CLASSES[cls].glyph}</span>${CLASSES[cls].label}</td><td>${s.white.counts[cls] || 0}</td><td>${s.black.counts[cls] || 0}</td></tr>`;
     const acc = (c) => (s[c].accuracy != null ? s[c].accuracy.toFixed(1) : '–');
     el.innerHTML = `
       <details class="an-sum">
@@ -478,9 +574,10 @@ export function createAnalysis(ctx) {
         <thead><tr><th></th><th>${esc(nameOf('white'))}</th><th>${esc(nameOf('black'))}</th></tr></thead>
         <tbody>
           <tr class="acc"><td>Accuracy</td><td>${s.white.accuracy?.toFixed(1) ?? '–'}</td><td>${s.black.accuracy?.toFixed(1) ?? '–'}</td></tr>
-          ${['best', 'excellent', 'good', 'inaccuracy', 'mistake', 'blunder'].map(row).join('')}
+          ${['book', 'best', 'excellent', 'good', 'inaccuracy', 'mistake', 'blunder'].map(row).join('')}
         </tbody>
       </table>
+      <p class="small muted an-depth">Stockfish depth ${A.passDepth} per move${A.passDepth < DEEP_DEPTH ? ' · use “Deeper review” for more accurate grades' : ''}</p>
       </details>`;
   }
 
@@ -534,8 +631,11 @@ export function createAnalysis(ctx) {
     if (beforeEval?.score && afterEval?.score && showEngine()) {
       el.append(h('p', { class: 'small muted' }, `Evaluation ${formatScore(beforeEval.score)} → ${formatScore(afterEval.score)}`));
     }
+    if (c?.cls === 'book') el.append(h('p', { class: 'small muted' }, A.opening ? `Opening theory: ${A.opening.replace(/^[A-E]\d\d /, '')}.` : 'A standard opening move.'));
     if (c && BAD.has(c.cls) && beforeEval?.best && beforeEval.best !== mv.uci) {
       const bestSan = sanOf(prevFen(), beforeEval.best);
+      const reason = A.ex > 0 ? explainMove({ fenBefore: prevFen(), played: mv.uci, before: beforeEval, after: afterEval, mover: mv.color }) || genericReason(c.cls, bestSan) : reasonFor(A.ply - 1);
+      if (reason) el.append(h('p', { class: 'an-reason' }, reason));
       const p = h('p', { class: 'small' }, 'Better was ', h('b', {}, bestSan), '.');
       el.append(p);
       const row = h('div', { class: 'an-btns' });
@@ -650,7 +750,11 @@ export function createAnalysis(ctx) {
     if (key === movesKey) return;
     movesKey = key;
     list.innerHTML = '';
-    const badge = (c) => (c ? h('span', { class: 'nag', style: `color:${CLASS_COLOR[c.cls]}` }, CLASSES[c.cls].glyph) : null);
+    const badge = (c) => {
+      if (!c) return null;
+      if (c.cls === 'book') return h('span', { class: 'nag nag-book', title: 'Book move', style: `color:${CLASS_COLOR.book}`, html: BOOK_SVG });
+      return h('span', { class: 'nag', style: `color:${CLASS_COLOR[c.cls]}` }, CLASSES[c.cls].glyph);
+    };
     const variation = () => {
       if (!A.explore) return null;
       const v = h('div', { class: 'variation' });
@@ -694,6 +798,8 @@ export function createAnalysis(ctx) {
     box.innerHTML = '';
     box.append(
       h('button', { class: 'btn', onclick: () => (store.set('cp.engineOn', !engineOn()), renderActions(), afterPositionChange()) }, engineOn() ? 'Hide engine' : 'Show engine'),
+      h('button', { class: 'btn', title: 'Play this position against the computer', onclick: () => ctx.practice?.(curFen()) }, 'Play from here'),
+      A.main.length && A.passDepth < DEEP_DEPTH ? h('button', { class: 'btn', title: `Re-analyze every move at depth ${DEEP_DEPTH} (slower)`, onclick: deeper }, 'Deeper review') : null,
       h('button', { class: 'btn', onclick: () => copyText(annotatedPgn(), 'Annotated PGN copied') }, 'Copy PGN'),
       h('button', { class: 'btn', onclick: () => close(true) }, 'Close'),
     );
@@ -710,6 +816,7 @@ export function createAnalysis(ctx) {
       ['Result', A.input.pgnResult || '*'],
     ];
     if (A.fens[0] !== START_FEN) tags.push(['SetUp', '1'], ['FEN', A.fens[0]]);
+    if (A.opening) tags.push(['ECO', A.opening.slice(0, 3)], ['Opening', A.opening.slice(4)]);
     const out = tags.map(([k, v]) => `[${k} "${String(v).replace(/"/g, "'")}"]`);
     const parts = [];
     A.main.forEach((m, i) => {
@@ -720,7 +827,7 @@ export function createAnalysis(ctx) {
       const e = A.evals[i + 1]?.score;
       const notes = [];
       if (e && e.mate !== 0) notes.push(`[%eval ${e.mate != null ? '#' + e.mate : (e.cp / 100).toFixed(2)}]`);
-      if (c && BAD.has(c.cls) && A.evals[i]?.best) notes.push(`${CLASSES[c.cls].label}. Best was ${sanOf(fen, A.evals[i].best)}.`);
+      if (c && BAD.has(c.cls) && A.evals[i]?.best) notes.push(`${CLASSES[c.cls].label}. ${reasonFor(i) || ''} Best was ${sanOf(fen, A.evals[i].best)}.`.replace(/\s+/g, ' '));
       if (notes.length) parts.push(`{ ${notes.join(' ')} }`);
     });
     parts.push(A.input.pgnResult || '*');
