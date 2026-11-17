@@ -16,7 +16,9 @@
   --top-h: 48px;
   --side-w: 380px;
   --gap: 20px;
-  --board: clamp(260px, min(calc(100dvh - var(--top-h) - 2 * var(--bar-h) - 48px), calc(100vw - var(--side-w) - var(--gap) - 48px)), 880px);
+  --board-base: clamp(260px, min(calc(100dvh - var(--top-h) - 2 * var(--bar-h) - 48px), calc(100vw - var(--side-w) - var(--gap) - 48px)), 880px);
+  --board: var(--board-base);
+  --evalbar-w: 18px;
   color-scheme: dark;
 }
 
@@ -341,6 +343,76 @@ body[data-view="home"] #pgn-btn, body[data-view="bot"] #pgn-btn, body[data-view=
 .g-conn.warn::before { background: #e0b341; }
 .g-conn.bad::before { background: var(--red); }
 
+/* ---------- analysis view */
+body[data-view="analysis"] { --board: calc(var(--board-base) - var(--evalbar-w) - 6px); }
+body[data-view="analysis"] .board-col { margin-left: calc(var(--evalbar-w) + 6px); }
+.evalbar {
+  position: absolute; top: 0; bottom: 0; left: calc(-1 * var(--evalbar-w) - 6px); width: var(--evalbar-w);
+  background: #403d39; border-radius: 3px; overflow: hidden;
+}
+.evalbar-white { position: absolute; left: 0; right: 0; bottom: 0; background: #f0efec; transition: height .35s ease; }
+.evalbar.flipped .evalbar-white { bottom: auto; top: 0; }
+.evalbar-score {
+  position: absolute; left: 0; right: 0; top: 3px; text-align: center;
+  font: 700 9px/1 system-ui, sans-serif; color: #f0efec; writing-mode: horizontal-tb;
+}
+.evalbar-score.on-white { top: auto; bottom: 3px; color: #403d39; }
+.evalbar.flipped .evalbar-score { top: auto; bottom: 3px; }
+.evalbar.flipped .evalbar-score.on-white { top: 3px; bottom: auto; }
+
+.analysis-view .panel-head { padding-bottom: 8px; }
+.an-progress { margin: 0 16px 8px; }
+.an-progress-bar { height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; margin-top: 4px; }
+.an-progress-bar span { display: block; height: 100%; width: 0; background: var(--green); transition: width .2s; }
+.an-graph { display: block; width: calc(100% - 32px); height: 56px; margin: 0 16px 8px; border-radius: 4px; cursor: pointer; flex: none; }
+.an-graph .g-bg { fill: #403d39; }
+.an-graph .g-area { fill: #e8e6e3; }
+.an-graph .g-mid { stroke: #8b8987; stroke-width: .6; stroke-dasharray: 3 3; }
+.an-graph .g-cur { stroke: var(--green); stroke-width: 1.6; }
+.an-summary { margin: 0 16px 8px; background: var(--panel-2); border-radius: 6px; padding: 6px 10px; flex: none; }
+.an-sum > summary { cursor: pointer; font-size: .86rem; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; list-style: none; }
+.an-sum > summary::-webkit-details-marker { display: none; }
+.an-sum > summary::after { content: "▾ details"; margin-left: auto; color: var(--muted); font-size: .75rem; }
+.an-sum[open] > summary::after { content: "▴ hide"; }
+.an-sum[open] > summary { margin-bottom: 4px; }
+.an-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.an-table th { font-weight: 700; text-align: right; padding: 2px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
+.an-table td { padding: 2px 4px; text-align: right; color: var(--muted); }
+.an-table td:first-child { text-align: left; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.an-table tr.acc td { font-size: .95rem; font-weight: 800; color: var(--text); padding-bottom: 4px; }
+.nag-dot { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; color: #fff; font-size: .62rem; font-weight: 800; flex: none; }
+.an-info { margin: 0 16px 8px; padding: 10px 12px; border-radius: 6px; background: var(--panel-2); min-height: 44px; flex: none; }
+.an-info p { margin: 4px 0 0; }
+.an-info-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cls-pill { font-size: .78rem; font-weight: 800; color: #fff; padding: 2px 8px; border-radius: 99px; }
+.explore-tag { font-size: .72rem; color: var(--muted); border: 1px solid #ffffff30; border-radius: 99px; padding: 1px 7px; }
+.an-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.btn.small-btn { padding: 6px 10px; font-size: .82rem; box-shadow: 0 2px 0 #00000055; }
+.btn.primary.small-btn { box-shadow: 0 3px 0 var(--green-shadow); }
+.retry-card b { display: block; }
+.ok-text { color: #8fd18f; }
+.bad-text { color: #f0a29c; }
+.an-lines { margin: 0 16px 8px; flex: none; }
+.an-lines-head { margin-bottom: 4px; }
+.an-line { display: flex; align-items: flex-start; gap: 8px; padding: 3px 0; border-top: 1px solid #ffffff0d; }
+.an-score { flex: none; min-width: 48px; text-align: center; font-weight: 800; font-size: .8rem; border-radius: 4px; padding: 2px 4px; }
+.an-score.w { background: #f0efec; color: #262421; }
+.an-score.b { background: #403d39; color: #f0efec; }
+.an-pv { display: flex; flex-wrap: wrap; gap: 0 2px; min-width: 0; }
+.pv-move { border: 0; background: none; padding: 1px 4px; border-radius: 3px; font-size: .84rem; color: #d6d4d0; }
+.pv-move:hover { background: #ffffff1c; color: #fff; }
+.an-lines-off { margin: 4px 0; }
+.an-moves { min-height: 120px; }
+.mv .nag { margin-left: 3px; font-weight: 800; font-size: .8rem; }
+.mv-empty { color: var(--muted); padding-left: 8px; }
+.variation {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0 2px;
+  margin: 2px 8px 4px 44px; padding: 3px 6px; border-left: 2px solid var(--green); background: #ffffff08; border-radius: 0 4px 4px 0;
+}
+.mv.vmv { font-weight: 500; font-size: .86rem; padding: 2px 5px; }
+.var-close { border: 0; background: none; color: var(--muted); font-size: 1.1rem; line-height: 1; padding: 0 4px; margin-left: auto; }
+.var-close:hover { color: var(--text); }
+
 /* ---------- modal & toast */
 .modal { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 16px; background: #000a; }
 .modal-card {
@@ -371,7 +443,8 @@ body[data-view="home"] #pgn-btn, body[data-view="bot"] #pgn-btn, body[data-view=
 @media (max-width: 900px) {
   :root {
     --bar-h: 44px;
-    --board: min(calc(100vw - 16px), calc(100dvh - var(--top-h) - 2 * var(--bar-h) - 24px), 640px);
+    --board-base: min(calc(100vw - 16px), calc(100dvh - var(--top-h) - 2 * var(--bar-h) - 24px), 640px);
+    --evalbar-w: 14px;
   }
   .layout { flex-direction: column; align-items: center; padding: 8px; gap: 10px; }
   .side { width: var(--board); height: auto; min-height: 0; }

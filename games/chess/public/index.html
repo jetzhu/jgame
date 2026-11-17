@@ -8,8 +8,8 @@
   <meta name="description" content="Play chess in your browser against the computer, or with a friend, with no login.">
   <meta name="theme-color" content="#302e2b">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="vendor/board.css?v=13865a49a6">
-  <link rel="stylesheet" href="style.css?v=13865a49a6">
+  <link rel="stylesheet" href="vendor/board.css?v=a467210d25">
+  <link rel="stylesheet" href="style.css?v=a467210d25">
 </head>
 <body data-view="home">
   <header class="topbar">
@@ -37,6 +37,7 @@
       <div class="board-wrap">
         <div id="board" class="cg-wrap"></div>
         <div id="promo" hidden></div>
+        <div class="evalbar" id="evalbar" hidden aria-hidden="true"><div class="evalbar-white"></div><span class="evalbar-score"></span></div>
       </div>
 
       <div class="player" id="bar-bottom">
@@ -72,6 +73,12 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg>
             </span>
             <span class="mi-text"><b>Play a Friend Online</b><small>Create a link, send it, play from anywhere</small></span>
+          </button>
+          <button class="menu-item" data-goto="import">
+            <span class="mi-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="M7 15l4-5 3 3 5-7"/></svg>
+            </span>
+            <span class="mi-text"><b>Analysis Board</b><small>Review any game with Stockfish: paste a PGN or set up a position</small></span>
           </button>
           <button class="menu-item" data-goto="local">
             <span class="mi-icon">
@@ -134,6 +141,37 @@
         </div>
       </div>
 
+      <!-- Analysis import -->
+      <div class="view" id="view-import" hidden>
+        <div class="panel-head"><button class="back" data-goto="home" aria-label="Back">‹</button><h2>Analysis Board</h2></div>
+        <div class="form">
+          <label class="field"><span>Paste a game (PGN) or a position (FEN)</span>
+            <textarea class="input" id="import-text" rows="8" spellcheck="false" placeholder="1. e4 e5 2. Nf3 Nc6 3. Bb5 …&#10;&#10;or&#10;&#10;r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"></textarea>
+          </label>
+          <button class="btn primary big" id="import-go">Analyze</button>
+          <button class="btn" id="import-empty">Start from the initial position</button>
+          <p class="muted small">Tip: after any game here, use <b>Analyze</b> to review it with move-by-move feedback.</p>
+        </div>
+      </div>
+
+      <!-- Analysis -->
+      <div class="view analysis-view" id="view-analysis" hidden>
+        <div class="panel-head game-head"><div><h2 id="an-title">Analysis</h2><div class="g-sub" id="an-sub"></div></div></div>
+        <div class="an-progress" id="an-progress" hidden><div class="an-progress-text small"></div><div class="an-progress-bar"><span></span></div></div>
+        <svg class="an-graph" id="an-graph" preserveAspectRatio="none" role="img" aria-label="Evaluation graph; click to jump to a move"></svg>
+        <div class="an-summary" id="an-summary" hidden></div>
+        <div class="an-info" id="an-info" aria-live="polite"></div>
+        <div class="an-lines" id="an-lines"></div>
+        <div class="moves an-moves" id="an-moves"></div>
+        <div class="nav">
+          <button class="icon-btn" id="an-first" title="Start (↑)" aria-label="Start">⏮</button>
+          <button class="icon-btn" id="an-prev" title="Back (←)" aria-label="Back">◀</button>
+          <button class="icon-btn" id="an-next" title="Forward (→)" aria-label="Forward">▶</button>
+          <button class="icon-btn" id="an-last" title="End (↓)" aria-label="End">⏭</button>
+        </div>
+        <div class="actions" id="an-actions"></div>
+      </div>
+
       <!-- Game -->
       <div class="view game-view" id="view-game" hidden>
         <div class="panel-head game-head">
@@ -191,6 +229,6 @@
   </div>
   <div class="toast" id="toast" hidden></div>
 
-  <script type="module" src="app.js?v=13865a49a6"></script>
+  <script type="module" src="app.js?v=a467210d25"></script>
 </body>
 </html>

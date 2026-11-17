@@ -1,10 +1,11 @@
 import { Chessground } from 'chessground';
-import { Chess } from 'chess.js';
+import { Chess, validateFen } from 'chess.js';
 import { Engine } from './engine.js';
 import { sound } from './sound.js';
 import { Net } from './net.js';
 import { GameRoom } from './room-core.js';
 import { DirectLink, webrtcSupported } from './p2p.js';
+import { createAnalysis } from './analysis-view.js';
 
 // ------------------------------------------------------------------ constants
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
@@ -156,6 +157,107 @@ const cg = Chessground($('#board'), {
 });
 new ResizeObserver(() => cg.redrawAll()).observe($('#board'));
 
+// Analysis view (whole-game review + live engine lines); see analysis-view.js.
+const analysis = createAnalysis({
+  cg,
+  $,
+  h,
+  esc,
+  store,
+  sound,
+  toast: (...a) => toast(...a),
+  copyText: (...a) => copyText(...a),
+  askPromotion: (...a) => askPromotion(...a),
+  paintBar: (...a) => paintBar(...a),
+  showView: (...a) => showView(...a),
+  getOrientation: () => S.orientation,
+  setOrientation: (c) => (S.orientation = c),
+  moveSound: (m, pos) => {
+    if (pos.inCheck()) sound.check();
+    else if (m.captured) sound.capture();
+    else if (m.flags.includes('k') || m.flags.includes('q')) sound.castle();
+    else sound.move();
+  },
+  onClose: () => exitAnalysis(),
+});
+let analysisReturn = null; // {mode, orientation} to restore when the analysis closes
+
+function openAnalysis(input) {
+  if (S.mode !== 'analysis') analysisReturn = S.mode ? { mode: S.mode, orientation: S.orientation } : null;
+  if (S.mode === 'bot') {
+    S.gen++;
+    engine?.stop();
+    S.bot.thinking = false;
+  }
+  closeModal();
+  cg.cancelPremove();
+  S.mode = 'analysis';
+  analysis.open(input);
+}
+
+function exitAnalysis() {
+  const back = analysisReturn;
+  analysisReturn = null;
+  if (back) {
+    S.mode = back.mode;
+    S.orientation = back.orientation;
+    enterGame();
+  } else {
+    S.mode = null;
+    showMenu();
+  }
+}
+
+/** Analyze the game currently on screen (offered once it's over). */
+function analyzeCurrent() {
+  const white = barName('white');
+  const black = barName('black');
+  const pgnResult = S.over ? (S.over.winner === 'white' ? '1-0' : S.over.winner === 'black' ? '0-1' : S.over.reason === 'aborted' ? '*' : '1/2-1/2') : '*';
+  openAnalysis({
+    startFen: START_FEN,
+    moves: hist().map(uci),
+    white,
+    black,
+    userColor: S.mode === 'bot' ? opp(S.bot.color) : S.mode === 'online' ? S.online?.you || null : null,
+    title: 'Game review',
+    subtitle: `${white} vs ${black}${S.over ? ` · ${resultScore()}` : ''}`,
+    result: S.over ? `${resultTitle()} ${REASON[S.over.reason] ?? ''}`.trim() : '',
+    pgnResult,
+    event: S.mode === 'online' ? 'Online casual game' : S.mode === 'bot' ? 'Game vs computer' : 'Pass & play',
+  });
+}
+
+/** Analysis board: paste a PGN or FEN, or start from the initial position. */
+function analyzeImported(text) {
+  text = text.trim();
+  if (!text) return openAnalysis({ startFen: START_FEN, moves: [], title: 'Analysis board', subtitle: 'Move pieces to explore' });
+  if (/^[1-8pnbrqkPNBRQK]+(\/[1-8pnbrqkPNBRQK]+){7} [wb] /.test(text)) {
+    if (!validateFen(text).ok) return toast('That FEN position is not valid.');
+    return openAnalysis({ startFen: text, moves: [], title: 'Analysis board', subtitle: 'From a position' });
+  }
+  const c = new Chess();
+  try {
+    c.loadPgn(text);
+  } catch {
+    return toast('Could not read that PGN. Check that it is a complete game record.');
+  }
+  const hd = c.getHeaders();
+  const moves = c.history({ verbose: true });
+  if (!moves.length) return toast('That PGN has no moves.');
+  openAnalysis({
+    startFen: hd.FEN || START_FEN,
+    moves: moves.map(uci),
+    white: hd.White && hd.White !== '?' ? hd.White : 'White',
+    black: hd.Black && hd.Black !== '?' ? hd.Black : 'Black',
+    userColor: null,
+    title: 'Game review',
+    subtitle: `${hd.White || 'White'} vs ${hd.Black || 'Black'}${hd.Result && hd.Result !== '*' ? ` · ${hd.Result}` : ''}`,
+    result: hd.Result && hd.Result !== '*' ? hd.Result : '',
+    pgnResult: hd.Result || '*',
+    event: hd.Event,
+  });
+}
+
 function legalDests() {
   const d = new Map();
   for (const m of S.chess.moves({ verbose: true })) {
@@ -174,6 +276,7 @@ function controlColor() {
 }
 
 function syncBoard() {
+  if (S.mode === 'analysis') return;
   const h = hist();
   const ply = S.viewPly ?? h.length;
   const live = ply === h.length;
@@ -194,6 +297,7 @@ function syncBoard() {
 }
 
 function onUserMove(orig, dest, meta) {
+  if (S.mode === 'analysis') return analysis.onBoardMove(orig, dest);
   const piece = S.chess.get(orig);
   if (piece?.type === 'p' && (dest[1] === '8' || dest[1] === '1')) {
     if (meta?.premove) return userMove(orig, dest, 'q');
@@ -932,7 +1036,7 @@ function handleNetError(msg) {
 }
 
 function onNet(msg) {
-  if (S.mode !== 'online' || !S.online) return;
+  if (!S.online || (S.mode !== 'online' && S.mode !== 'analysis')) return;
   const O = S.online;
   if (O.kind === 'host') return hostOnNet(msg);
   switch (msg.t) {
@@ -1134,8 +1238,8 @@ function material(fen) {
   return cnt;
 }
 
-function fillBar(bar, color) {
-  const fen = S.fens[S.viewPly ?? S.fens.length - 1];
+/** Paint a player bar: name, tag, captured pieces and material edge for the position `fen`. */
+function paintBar(bar, { color, fen, name, tag = '', online = null, bot = false, toMove = false, clock = false }) {
   const cnt = material(fen);
   const mine = color[0];
   const theirs = mine === 'w' ? 'b' : 'w';
@@ -1151,28 +1255,35 @@ function fillBar(bar, color) {
   const score = (s) => Object.entries(cnt[s]).reduce((a, [t, n]) => a + VALUE[t] * n, 0);
   const adv = score(mine) - score(theirs);
   $('.p-adv', bar).textContent = adv > 0 ? `+${adv}` : '';
-
-  let name = barName(color);
-  const nameEl = $('.p-name', bar);
-  nameEl.textContent = name;
-  const tag = $('.p-tag', bar);
-  tag.textContent = '';
-  if (S.mode === 'online' && S.online?.you === color) tag.textContent = 'you';
-  else if (S.mode === 'bot' && color === S.bot.color) tag.textContent = LEVELS[S.bot.level - 1].name;
-
+  $('.p-name', bar).textContent = name;
+  $('.p-tag', bar).textContent = tag;
   const dot = $('.p-dot', bar);
-  const p = S.mode === 'online' ? S.online?.players?.[color] : null;
-  dot.hidden = !p;
-  dot.classList.toggle('on', !!p?.online);
-  dot.title = p?.online ? 'Online' : 'Offline';
-
-  const isBot = S.mode === 'bot' && color === S.bot.color;
+  dot.hidden = online == null;
+  dot.classList.toggle('on', !!online);
+  dot.title = online ? 'Online' : 'Offline';
   const av = $('.p-avatar', bar);
   av.className = `p-avatar ${color}`;
-  av.innerHTML = `<span class="pc ${isBot ? 'knight' : 'king'} ${color}"></span>`;
+  av.innerHTML = `<span class="pc ${bot ? 'knight' : 'king'} ${color}"></span>`;
   bar.dataset.color = color;
-  bar.classList.toggle('to-move', !!S.mode && !S.over && turn() === color);
-  $('.p-clock', bar).hidden = !S.clock;
+  bar.classList.toggle('to-move', toMove);
+  $('.p-clock', bar).hidden = !clock;
+}
+
+function fillBar(bar, color) {
+  let tag = '';
+  if (S.mode === 'online' && S.online?.you === color) tag = 'you';
+  else if (S.mode === 'bot' && color === S.bot.color) tag = LEVELS[S.bot.level - 1].name;
+  const p = S.mode === 'online' ? S.online?.players?.[color] : null;
+  paintBar(bar, {
+    color,
+    fen: S.fens[S.viewPly ?? S.fens.length - 1],
+    name: barName(color),
+    tag,
+    online: p ? !!p.online : null,
+    bot: S.mode === 'bot' && color === S.bot.color,
+    toMove: !!S.mode && !S.over && turn() === color,
+    clock: !!S.clock,
+  });
 }
 
 function renderPlayers() {
@@ -1182,6 +1293,7 @@ function renderPlayers() {
 }
 
 function renderClocks() {
+  if (S.mode === 'analysis') return;
   for (const bar of [$('#bar-top'), $('#bar-bottom')]) {
     const clk = $('.p-clock', bar);
     if (!S.clock) {
@@ -1275,11 +1387,12 @@ function renderActions() {
     } else {
       box.append(button('Rematch', () => startBot({ level: S.bot.level, color: S.bot.pref || opp(S.bot.color) }), 'primary'));
     }
+    if (over) box.append(button('Analyze', analyzeCurrent));
     box.append(button('New game', showMenu));
   } else if (S.mode === 'local') {
     if (!over) {
       box.append(button('Takeback', takeback, '', { disabled: !n || null }), button('Draw', offerDraw), button('Resign', resign, 'danger'));
-    } else box.append(button('Play again', () => startLocal({ tc: S.tc, autoFlip: S.local.autoFlip }), 'primary'));
+    } else box.append(button('Play again', () => startLocal({ tc: S.tc, autoFlip: S.local.autoFlip }), 'primary'), button('Analyze', analyzeCurrent));
     box.append(button('New game', showMenu));
   } else if (S.mode === 'online') {
     const O = S.online;
@@ -1292,6 +1405,7 @@ function renderActions() {
       }
       box.append(button(n < 2 ? 'Abort' : 'Resign', resign, 'danger'));
     }
+    if (O.status === 'over') box.append(button('Analyze', analyzeCurrent));
     if (O.you && O.status === 'over') {
       const theyAsk = O.rematchOffer === opp(O.you);
       const iAsked = O.rematchOffer === O.you;
@@ -1350,7 +1464,7 @@ function renderGamePanel() {
 }
 
 function render() {
-  if (!S.mode) return;
+  if (!S.mode || S.mode === 'analysis') return;
   renderPlayers();
   renderMoves();
   renderGamePanel();
@@ -1372,6 +1486,11 @@ function enterGame() {
 }
 
 function showMenu() {
+  if (analysis.isOpen()) {
+    analysisReturn = null;
+    analysis.close(false);
+    if (S.online) S.mode = 'online'; // so the online session below is left properly
+  }
   if (S.mode === 'bot') {
     S.gen++;
     engine?.stop();
@@ -1436,6 +1555,7 @@ function showResult() {
   if (S.mode === 'bot') actions.push({ label: 'Rematch', primary: true, onClick: () => startBot({ level: S.bot.level, color: S.bot.pref || opp(S.bot.color) }) });
   if (S.mode === 'local') actions.push({ label: 'Play again', primary: true, onClick: () => startLocal({ tc: S.tc, autoFlip: S.local.autoFlip }) });
   if (S.mode === 'online' && S.online?.you) actions.push({ label: 'Rematch', primary: true, onClick: () => sendGame({ t: 'rematch' }) });
+  actions.push({ label: 'Analyze game', onClick: analyzeCurrent });
   actions.push({ label: 'Review game' });
   modal({
     title: resultTitle(),
@@ -1628,13 +1748,19 @@ function pruneHostedSaves() {
 
 function init() {
   initSetup();
-  $('#flip-btn').onclick = flip;
+  $('#flip-btn').onclick = () => (S.mode === 'analysis' ? analysis.flip() : flip());
   $('#sound-btn').onclick = () => {
     sound.enabled = !sound.enabled;
     $('#sound-btn').classList.toggle('off', !sound.enabled);
     toast(sound.enabled ? 'Sound on' : 'Sound off', 1000);
   };
-  $('#pgn-btn').onclick = () => copyText(pgn(), 'PGN copied to clipboard');
+  $('#pgn-btn').onclick = () => (S.mode === 'analysis' ? analysis.copyPgn() : copyText(pgn(), 'PGN copied to clipboard'));
+  $('#an-first').onclick = () => analysis.nav.first();
+  $('#an-prev').onclick = () => analysis.nav.prev();
+  $('#an-next').onclick = () => analysis.nav.next();
+  $('#an-last').onclick = () => analysis.nav.last();
+  $('#import-go').onclick = () => analyzeImported($('#import-text').value);
+  $('#import-empty').onclick = () => analyzeImported('');
   $('#settings-btn').onclick = showSettings;
   $('#nav-first').onclick = () => goto(0);
   $('#nav-prev').onclick = () => goto((S.viewPly ?? S.chess.history().length) - 1);
@@ -1661,6 +1787,10 @@ function init() {
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select')) return;
     if (e.key === 'Escape' && !$('#modal').hidden && $('#modal').dataset.dismissible) return closeModal();
+    if (S.mode === 'analysis') {
+      if (analysis.onKey(e)) e.preventDefault();
+      return;
+    }
     if (!S.mode) return;
     const cur = S.viewPly ?? S.chess.history().length;
     if (e.key === 'ArrowLeft') goto(cur - 1);
