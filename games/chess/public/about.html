@@ -7,8 +7,8 @@
   <meta name="description" content="About Chess Playground: credits, open-source licenses and privacy.">
   <meta name="theme-color" content="#302e2b">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="vendor/board.css?v=055280e076">
-  <link rel="stylesheet" href="style.css?v=055280e076">
+  <link rel="stylesheet" href="vendor/board.css?v=af01a71d76">
+  <link rel="stylesheet" href="style.css?v=af01a71d76">
   <style>
     .about { max-width: 760px; margin: 0 auto; padding: 32px 16px 56px; }
     .about h1 { font-size: 2rem; margin-bottom: 6px; }
@@ -54,7 +54,7 @@
     <h2>How online games work</h2>
     <ul>
       <li><b>Player-hosted (default):</b> the game runs in the browser of the player who created it. This server only introduces the players. When it can, your browser then connects directly to the other player's browser using WebRTC, so moves and chat don't pass through this server and the game keeps going even if the server restarts. If a direct connection isn't possible, traffic is relayed through this server without being stored.</li>
-      <li><b>Direct connections share IP addresses.</b> To connect directly, the two browsers exchange network addresses, so the other player can see your public IP address. Your browser also asks a public STUN service (Cloudflare or Google) for that address. To avoid both, turn on <b>Hide my IP address</b> in Settings, and all game traffic will be relayed through this server instead.</li>
+      <li><b>Direct connections share IP addresses.</b> To connect directly, the two browsers exchange network addresses, so the other player can see your public IP address. To learn that address, your browser asks this site's own STUN service (and, only while ours isn't reachable, Cloudflare's public one). To avoid both, turn on <b>Hide my IP address</b> in Settings, and all game traffic will be relayed through this server instead.</li>
       <li><b>Server-hosted</b> (optional, only offered while the server is idle): the game runs on this server. Moves and chat exist only in the server's memory. They are not written to disk and disappear once a game is inactive.</li>
     </ul>
 

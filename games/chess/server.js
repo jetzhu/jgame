@@ -13,6 +13,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import dgram from 'node:dgram';
+import dns from 'node:dns/promises';
 import { GameRoom } from './src/room-core.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
@@ -24,6 +26,12 @@ const MAX_LOAD_PER_CPU = Number(process.env.MAX_LOAD_PER_CPU ?? 0.5);
 const MIN_MEM_AVAILABLE = Number(process.env.MIN_MEM_AVAILABLE ?? 0.25);
 const MAX_SERVER_GAMES = Number(process.env.MAX_SERVER_GAMES ?? 10);
 const FORCE_HOSTING = process.env.SERVER_HOSTING; // 'on' | 'off' overrides the load check (tests)
+
+// STUN servers handed to browsers for player-hosted games. Ours is preferred; the fallback is
+// only advertised while ours doesn't answer on its public address (e.g. port not forwarded yet).
+const STUN_SELF = process.env.STUN_SELF ?? 'stun:jgame.duckdns.org:3478';
+const STUN_FALLBACK = process.env.STUN_FALLBACK ?? 'stun:stun.cloudflare.com:3478';
+let stunSelfOk = false;
 
 const MAX_ROOMS = 5000;
 const MAX_PEERS = 20; // per player-hosted room (players + spectators)
@@ -60,7 +68,7 @@ function serveStatic(req, res) {
   if (urlPath === '/status') {
     return res
       .writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
-      .end(JSON.stringify({ serverHosting: serverHosting() }));
+      .end(JSON.stringify({ serverHosting: serverHosting(), stun: stunServers() }));
   }
   if (urlPath.endsWith('/')) urlPath += 'index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, urlPath));
@@ -105,6 +113,52 @@ function serverHosting() {
   else if (active >= MAX_SERVER_GAMES) value = { available: false, reason: 'All server-hosted game slots are in use.' };
   hostingCache = { at: Date.now(), value };
   return value;
+}
+
+// ---------------------------------------------------------------- STUN self-check
+function stunServers() {
+  const list = [];
+  if (STUN_SELF) list.push(STUN_SELF);
+  if (!stunSelfOk && STUN_FALLBACK) list.push(STUN_FALLBACK);
+  return list;
+}
+
+/** Send a STUN binding request to our own public STUN address; true if it answers. */
+async function probeStun(url, timeoutMs = 2500) {
+  const m = /^stun:([^:]+):(\d+)$/.exec(url || '');
+  if (!m) return false;
+  let address;
+  try {
+    ({ address } = await dns.lookup(m[1], { family: 4 }));
+  } catch {
+    return false;
+  }
+  return new Promise((resolve) => {
+    const sock = dgram.createSocket('udp4');
+    const req = Buffer.alloc(20);
+    req.writeUInt16BE(0x0001, 0);
+    req.writeUInt32BE(0x2112a442, 4);
+    crypto.randomBytes(12).copy(req, 8);
+    const done = (ok) => {
+      clearTimeout(timer);
+      sock.close();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    sock.on('message', (msg) => done(msg.length >= 20 && msg.readUInt16BE(0) === 0x0101 && msg.subarray(8, 20).equals(req.subarray(8, 20))));
+    sock.on('error', () => done(false));
+    sock.send(req, Number(m[2]), address);
+  });
+}
+
+async function checkStun() {
+  const ok = await probeStun(STUN_SELF);
+  if (ok !== stunSelfOk) console.log(`own STUN ${ok ? 'reachable' : 'NOT reachable'} at ${STUN_SELF}`);
+  stunSelfOk = ok;
+}
+if (STUN_SELF && process.env.NODE_ENV === 'production') {
+  checkStun();
+  setInterval(checkStun, 10 * 60 * 1000).unref();
 }
 
 // ---------------------------------------------------------------- rooms

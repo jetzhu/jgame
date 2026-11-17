@@ -1,0 +1,12 @@
+{
+  "name": "jgame-stun",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal STUN (binding only) server for jgame player-hosted games",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test 'test/**/*.test.js'"
+  }
+}

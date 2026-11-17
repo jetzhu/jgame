@@ -1,0 +1,20 @@
+[Unit]
+Description=jgame STUN server (UDP 3478) for player-hosted games
+After=network.target
+
+[Service]
+WorkingDirectory=%h/srv/jgame/current/services/stun
+ExecStart=/usr/bin/node server.js
+Environment=STUN_PORT=3478 STUN_HOST=0.0.0.0 STUN_HEALTH_PORT=3479
+Restart=always
+RestartSec=2
+Nice=10
+CPUWeight=20
+MemoryMax=100M
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

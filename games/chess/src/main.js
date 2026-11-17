@@ -4,7 +4,7 @@ import { Engine } from './engine.js';
 import { sound } from './sound.js';
 import { Net } from './net.js';
 import { GameRoom } from './room-core.js';
-import { DirectLink, webrtcSupported } from './p2p.js';
+import { DirectLink, webrtcSupported, setStunServers } from './p2p.js';
 import { createAnalysis } from './analysis-view.js';
 
 // ------------------------------------------------------------------ constants
@@ -755,7 +755,9 @@ function randomId(n) {
 async function fetchHostingStatus() {
   try {
     const r = await fetch('status', { cache: 'no-store' });
-    return (await r.json()).serverHosting;
+    const st = await r.json();
+    setStunServers(st.stun);
+    return st.serverHosting;
   } catch {
     return { available: false, reason: 'Could not reach the server.' };
   }
@@ -1851,6 +1853,7 @@ function pruneHostedSaves() {
 }
 
 function init() {
+  fetchHostingStatus(); // also picks up which STUN servers to use
   initSetup();
   $('#flip-btn').onclick = () => (S.mode === 'analysis' ? analysis.flip() : flip());
   $('#sound-btn').onclick = () => {

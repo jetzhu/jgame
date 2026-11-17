@@ -3,7 +3,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 test -f "$root/site/index.html" || { echo "missing site/index.html" >&2; exit 1; }
-for pkg in "$root"/games/*/package.json; do
+for pkg in "$root"/games/*/package.json "$root"/services/*/package.json; do
   dir="$(dirname "$pkg")"
   echo "==> $(basename "$dir")"
   (

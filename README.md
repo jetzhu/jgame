@@ -11,6 +11,7 @@ Small browser games served at **https://jgame.duckdns.org**, with no login requi
 ```
 site/                 landing page (synced to the Caddy container's www/jgame)
 games/<name>/         one folder per game, self-contained (own package.json, build, tests)
+services/stun/        our own STUN server (UDP 3478) for player-hosted direct connections
 deploy/caddy/         Caddy route file for jgame.duckdns.org (installed + reloaded by deploy.sh)
 deploy/systemd/       systemd user units (game servers, deploy timer)
 deploy/services.txt   game servers to restart + health-check on each deploy

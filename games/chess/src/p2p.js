@@ -3,7 +3,11 @@
 // game traffic flows directly between the two browsers.
 //
 // No TURN server: if hole punching fails, callers keep using the server relay instead.
-const ICE_SERVERS = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+// Set from the server's /status (our own STUN, plus a fallback only while ours is unreachable).
+let ICE_SERVERS = [{ urls: ['stun:jgame.duckdns.org:3478'] }];
+export function setStunServers(urls) {
+  if (Array.isArray(urls) && urls.length) ICE_SERVERS = [{ urls }];
+}
 const OPEN_TIMEOUT_MS = 12000;
 
 export const webrtcSupported = () => typeof RTCPeerConnection !== 'undefined';
