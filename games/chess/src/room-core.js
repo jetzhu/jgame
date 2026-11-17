@@ -8,6 +8,8 @@ export const TIME_CONTROLS = ['none', '1+0', '2+1', '3+0', '3+2', '5+0', '5+3', 
 export const other = (c) => (c === 'white' ? 'black' : 'white');
 const colorOf = (turn) => (turn === 'w' ? 'white' : 'black');
 const MAX_CHAT = 60;
+/** A player who has had no connection for this long can be claimed against (win, or draw). */
+export const CLAIM_MS = 120_000;
 
 export function parseTc(tc) {
   if (!TIME_CONTROLS.includes(tc) || tc === 'none') return null;
@@ -59,6 +61,7 @@ export class GameRoom {
     this.now = now;
     this.seats = { white: null, black: null }; // {token, name}
     this.conns = new Map(); // conn -> seat color | null (spectator)
+    this.goneSince = { white: null, black: null }; // when a seated player lost their last connection
     this.chat = [];
     this.chatId = 0;
     this.gameNo = 0;
@@ -106,12 +109,23 @@ export class GameRoom {
 
   attach(conn, seat) {
     this.conns.set(conn, seat);
+    if (seat) this.goneSince[seat] = null;
     this.io.send(conn, { t: 'chat', entries: this.chat, reset: true });
   }
 
   /** Returns true if the connection was known. Caller broadcasts. */
   detach(conn) {
-    return this.conns.delete(conn);
+    const seat = this.conns.get(conn);
+    if (!this.conns.delete(conn)) return false;
+    if (seat && !this.onlineSeats().has(seat)) this.goneSince[seat] = this.now();
+    return true;
+  }
+
+  /** ms until `seat` may claim against its absent opponent (0 = now), or null if not applicable. */
+  claimIn(seat) {
+    const gone = seat && this.goneSince[other(seat)];
+    if (!gone || this.status !== 'playing' || !this.seats[other(seat)]) return null;
+    return Math.max(0, CLAIM_MS - (this.now() - gone));
   }
 
   seatOf(token) {
@@ -207,6 +221,14 @@ export class GameRoom {
       case 'flag':
         this.checkFlag();
         return;
+      case 'claim':
+        if (seat && this.claimIn(seat) === 0) {
+          if (this.moves.length < 2) this.finish(null, 'aborted');
+          else if (msg.draw) this.finish(null, 'abandoned');
+          else this.finish(seat, 'abandonment');
+          this.broadcast();
+        }
+        return;
       case 'rematch':
         if (!seat || this.status !== 'over') return;
         if (this.rematchOffer === other(seat)) {
@@ -287,6 +309,7 @@ export class GameRoom {
       drawOffer: this.drawOffer,
       rematchOffer: this.rematchOffer,
       tc: this.tc ? this.tc.label : 'none',
+      claimIn: you ? this.claimIn(you) : null,
       clock: this.clock ? { white: this.remaining('white'), black: this.remaining('black'), running: this.clockRunning() } : null,
     };
   }
@@ -346,6 +369,8 @@ export class GameRoom {
       room.clock.black = data.clock.black;
       room.clock.since = room.clockRunning() ? room.now() : null;
     }
+    // Nobody is connected yet after a restore; the absence clock starts now.
+    for (const c of ['white', 'black']) room.goneSince[c] = room.seats[c] ? room.now() : null;
     room.scheduleFlag();
     return room;
   }

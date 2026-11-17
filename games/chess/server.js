@@ -220,18 +220,23 @@ function handle(ws, msg) {
     case 'host': {
       const id = String(msg.room || '');
       const secret = String(msg.secret || '');
+      // Hosting "epoch": bumped when a guest takes over from a vanished host. The highest epoch
+      // hosts; a returning older host is told to rejoin as a player instead.
+      const epoch = Math.max(0, Math.floor(Number(msg.epoch) || 0));
       if (!ID_RE.test(id) || secret.length < 16 || secret.length > 128) return send(ws, { t: 'error', error: 'Bad host request.' });
       let r = p2pRooms.get(id);
       if (r) {
         if (r.secret !== secret) return send(ws, { t: 'error', code: 'taken', error: 'That game id belongs to someone else.', fatal: true });
+        if (epoch < r.epoch) return send(ws, { t: 'error', code: 'superseded', error: 'Another player is now hosting this game.' });
         if (r.host && r.host !== ws) {
-          send(r.host, { t: 'error', code: 'host-moved', error: 'This game is now hosted from another tab.', fatal: true });
+          send(r.host, { t: 'error', code: 'superseded', error: 'This game is now hosted elsewhere.' });
           r.host.p2pHost = null;
         }
+        r.epoch = epoch;
       } else {
         if (serverRooms.has(id)) return send(ws, { t: 'error', code: 'taken', error: 'That game id is taken.', fatal: true });
         if (serverRooms.size + p2pRooms.size >= MAX_ROOMS) return send(ws, { t: 'error', error: 'Server is full, try again later.' });
-        r = { id, secret, host: null, peers: new Map(), hostGoneAt: null, lastActive: Date.now() };
+        r = { id, secret, epoch, host: null, peers: new Map(), hostGoneAt: null, lastActive: Date.now() };
         p2pRooms.set(id, r);
       }
       if (ws.p2pHost !== r) detach(ws);

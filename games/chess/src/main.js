@@ -61,7 +61,10 @@ const REASON = {
   '50-move rule': 'by the 50-move rule',
   'timeout vs insufficient material': 'timeout vs insufficient material',
   aborted: '',
+  abandonment: 'by abandonment',
+  abandoned: '(opponent left)',
 };
+const TAKEOVER_MS = 45_000; // a vanished host is replaced by its opponent after this long
 
 // ------------------------------------------------------------------ helpers
 const $ = (s, root = document) => root.querySelector(s);
@@ -779,7 +782,7 @@ function ensureNet() {
   net.onOpen = () => {
     const O = S.online;
     if (!O) return;
-    if (O.kind === 'host') net.send({ t: 'host', room: O.room, secret: hostCtx.secret });
+    if (O.kind === 'host') net.send({ t: 'host', room: O.room, secret: hostCtx.secret, epoch: hostCtx.epoch });
     else if (O.kind === 'server' && O.create) net.send({ t: 'create', ...O.create, name: myName() });
     else net.send({ t: 'join', room: O.room, token: tokens()[O.room], name: myName(), spectate: O.spectate });
   };
@@ -867,7 +870,7 @@ function startHosting({ tc, color }, saved = null) {
     toast('Could not restore that game.');
     return showMenu();
   }
-  hostCtx = { room, secret: saved?.secret || randomHex(16), links: new Map(), serverPeers: new Set(), lastTick: Date.now(), lastPeerMsgAt: 0 };
+  hostCtx = { room, secret: saved?.secret || randomHex(16), epoch: saved?.epoch || 0, links: new Map(), serverPeers: new Set(), lastTick: Date.now(), lastPeerMsgAt: 0 };
   hostCtx.tick = setInterval(hostTick, 1000);
   S.online = { kind: 'host', room: room.id, you: null, players: {}, status: 'connecting', gameNo: 0, registered: false };
   if (saved) room.attach('local', saved.hostSeat || null);
@@ -892,7 +895,7 @@ function stopHosting(closeRoom) {
 function saveHosted() {
   if (!hostCtx) return;
   const { room, secret } = hostCtx;
-  store.set(`cp.host.${room.id}`, { secret, room: room.toJSON(), hostSeat: room.conns.get('local') || null, savedAt: Date.now() });
+  store.set(`cp.host.${room.id}`, { secret, epoch: hostCtx.epoch, room: room.toJSON(), hostSeat: room.conns.get('local') || null, savedAt: Date.now() });
 }
 
 function hostSend(conn, msg) {
@@ -902,7 +905,15 @@ function hostSend(conn, msg) {
     queueMicrotask(() => onGameMsg(msg));
     return;
   }
-  const out = msg.t === 'state' ? { ...msg, direct: !relayOnly() && webrtcSupported() } : msg;
+  let out = msg;
+  if (msg.t === 'state') {
+    out = { ...msg, direct: !relayOnly() && webrtcSupported() };
+    // Succession: only the seated opponent (never spectators) can take over hosting.
+    if (msg.you) {
+      const seats = hostCtx.room.seats;
+      out.heir = { secret: hostCtx.secret, epoch: hostCtx.epoch, tokens: { white: seats.white?.token || null, black: seats.black?.token || null } };
+    }
+  }
   if (!hostCtx.links.get(conn)?.send(out)) net?.send({ t: 'fwd', to: conn, data: out });
 }
 
@@ -983,6 +994,63 @@ function hostOnNet(msg) {
   }
 }
 
+// ---------------------------------------------------------- guest takes over a vanished host
+function takeoverDueIn() {
+  const O = S.online;
+  if (!O || O.kind !== 'guest' || !O.you || !O.heir || !O.lastState || O.hostOnline || guestLink?.isOpen || !O.hostGoneAt) return null;
+  if (S.netStatus !== 'open') return null; // need the server to re-register the game
+  return Math.max(0, TAKEOVER_MS - (Date.now() - O.hostGoneAt));
+}
+
+function takeOver() {
+  const O = S.online;
+  const st = O.lastState;
+  const { heir } = O;
+  const chatLog = O.chatLog || [];
+  const seat = (c) => (st.players[c] ? { token: heir.tokens[c], name: st.players[c].name } : null);
+  const saved = {
+    secret: heir.secret,
+    epoch: heir.epoch + 1,
+    hostSeat: O.you,
+    room: {
+      v: 1,
+      id: O.room,
+      tc: st.tc,
+      seats: { white: seat('white'), black: seat('black') },
+      moves: st.moves.map(uci),
+      status: st.status,
+      result: st.result,
+      drawOffer: st.drawOffer,
+      rematchOffer: st.rematchOffer,
+      clock: st.clock ? { white: st.clock.white, black: st.clock.black } : null, // time while the host was gone isn't charged
+      gameNo: st.gameNo,
+      seq: st.seq + 1000,
+      chat: chatLog.slice(-60),
+      chatId: chatLog.reduce((m, e) => Math.max(m, e.id || 0), 0),
+    },
+  };
+  guestLink?.close();
+  guestLink = null;
+  O.gameNo = 0; // re-sync from our own room
+  O.lastSeq = null;
+  startHosting({}, saved);
+  sound.notify();
+  toast('The host left, so you are now hosting this game.', 4000);
+}
+
+// Once a second: guest takeover countdown, and claim-win countdowns in the status line.
+setInterval(() => {
+  if (S.mode !== 'online' || !S.online) return;
+  const due = takeoverDueIn();
+  if (due === 0) return takeOver();
+  const claimable = !S.over && S.online.claimAt != null && S.online.claimAt <= Date.now();
+  if (due != null || S.online.claimAt != null) $('#g-status').textContent = statusText();
+  if (claimable !== !!S.online.lastClaimable) {
+    S.online.lastClaimable = claimable;
+    renderActions();
+  }
+}, 1000);
+
 // ---------------------------------------------------------- guest of a player-hosted game
 function maybeStartGuestLink() {
   const O = S.online;
@@ -997,6 +1065,7 @@ function maybeStartGuestLink() {
       if (guestLink !== link) return;
       if (st === 'closed') {
         guestLink = null;
+        if (S.online && !S.online.hostOnline) S.online.hostGoneAt = Date.now(); // lost all contact now
         setTimeout(maybeStartGuestLink, 15000);
       } else S.online.linkAttempts = 0;
       render();
@@ -1014,6 +1083,15 @@ function guestReceive(data) {
 let retryJoinTimer = null;
 function handleNetError(msg) {
   const O = S.online;
+  if (msg.code === 'superseded' && O?.kind === 'host') {
+    // Our opponent took over while we were away. Rejoin their game as a player.
+    const room = O.room;
+    store.del(`cp.host.${room}`);
+    stopHosting(false);
+    toast('While you were away your opponent took over hosting. Rejoining the game…', 4000);
+    joinOnline(room);
+    return;
+  }
   if (msg.code === 'busy' && O?.kind === 'server' && O.create) {
     toast(`${msg.error} Hosting this game in your browser instead.`, 3500);
     const { tc, color } = O.create;
@@ -1047,6 +1125,12 @@ function onNet(msg) {
       return;
     case 'p2p-joined':
       Object.assign(O, { kind: 'guest', peerId: msg.peerId, hostOnline: msg.hostOnline, waitingHost: false, reportedToken: null });
+      if (!msg.hostOnline) O.hostGoneAt ??= Date.now();
+      // After our own refresh we may still hold what's needed to take over (see takeOver()).
+      if (!O.heir) {
+        const kept = store.get(`cp.guest.${O.room}`);
+        if (kept) Object.assign(O, { heir: kept.heir, lastState: kept.lastState, chatLog: kept.chatLog || [] });
+      }
       render();
       return;
     case 'fwd':
@@ -1054,6 +1138,7 @@ function onNet(msg) {
       return;
     case 'host-gone':
       O.hostOnline = false;
+      O.hostGoneAt ??= Date.now();
       render();
       return;
     case 'host-back':
@@ -1107,7 +1192,13 @@ function applyOnlineState(st) {
   if (O.kind === 'guest') {
     O.hostDirect = !!st.direct;
     O.hostOnline = true;
+    O.hostGoneAt = null;
+    if (st.heir) O.heir = st.heir;
   }
+  O.lastState = st;
+  O.stateAt = Date.now();
+  if (O.kind === 'guest' && O.heir && O.you) store.set(`cp.guest.${st.room}`, { heir: O.heir, lastState: st, chatLog: (O.chatLog || []).slice(-60), savedAt: Date.now() });
+  O.claimAt = st.claimIn != null ? Date.now() + st.claimIn : null;
   if (st.token) {
     saveToken(st.room, st.token);
     if (O.kind === 'guest' && O.reportedToken !== st.token) {
@@ -1182,6 +1273,7 @@ function addChat(entries, reset) {
   if (reset) {
     log.innerHTML = '';
     chatSeen.clear();
+    if (S.online) S.online.chatLog = [];
   }
   let fresh = null;
   for (const e of entries) {
@@ -1190,6 +1282,7 @@ function addChat(entries, reset) {
       chatSeen.add(e.id);
     }
     fresh = e;
+    S.online?.chatLog?.push(e);
     log.append(h('div', { class: 'chat-line' }, h('b', { class: e.color ? `c-${e.color}` : '' }, e.from + ': '), e.text));
   }
   log.scrollTop = log.scrollHeight;
@@ -1357,11 +1450,18 @@ function statusText() {
     const independent = O.kind === 'host' || (O.kind === 'guest' && guestLink?.isOpen);
     if (!independent && S.netStatus !== 'open') return S.netStatus === 'connecting' && !O.gameNo ? 'Connecting…' : 'Connection lost — reconnecting…';
     if (O.waitingHost) return 'Waiting for the host to come back online…';
+    const due = takeoverDueIn();
+    if (due != null) return `The host is offline. You'll take over hosting in ${Math.ceil(due / 1000)}s if they don't return.`;
     if (O.kind === 'guest' && !O.hostOnline && !guestLink?.isOpen) return 'The host is offline — waiting for them to return…';
     if (!O.gameNo) return 'Connecting…';
     if (O.status === 'waiting') return 'Waiting for your friend to join…';
     if (!O.you) return `Watching · ${cap(turn())} to move`;
     const them = O.players[opp(O.you)];
+    if (them && !them.online && O.claimAt != null) {
+      const left = Math.ceil((O.claimAt - Date.now()) / 1000);
+      if (left > 0) return `Opponent disconnected. You can claim the game in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} if they don't return.`;
+      return 'Your opponent left. You can claim the win, or call it a draw.';
+    }
     if (them && !them.online) return turn() === O.you ? 'Your move (opponent disconnected)' : 'Opponent disconnected — waiting…';
     return turn() === O.you ? 'Your move' : "Opponent's move";
   }
@@ -1402,6 +1502,10 @@ function renderActions() {
         box.append(button('Accept draw', offerDraw, 'primary'), button('Decline', () => sendGame({ t: 'declineDraw' })));
       } else if (n >= 2) {
         box.append(button(O.drawOffer === O.you ? 'Draw offered' : 'Offer draw', offerDraw, '', { disabled: O.drawOffer === O.you || null }));
+      }
+      if (O.claimAt != null && O.claimAt <= Date.now()) {
+        if (n < 2) box.append(button('Abort game', () => sendGame({ t: 'claim' }), 'primary'));
+        else box.append(button('Claim win', () => sendGame({ t: 'claim' }), 'primary'), button('Call it a draw', () => sendGame({ t: 'claim', draw: true })));
       }
       box.append(button(n < 2 ? 'Abort' : 'Resign', resign, 'danger'));
     }
@@ -1741,7 +1845,7 @@ function pruneHostedSaves() {
   try {
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
-      if (k?.startsWith('cp.host.') && Date.now() - (store.get(k)?.savedAt || 0) > 24 * 3600 * 1000) localStorage.removeItem(k);
+      if ((k?.startsWith('cp.host.') || k?.startsWith('cp.guest.')) && Date.now() - (store.get(k)?.savedAt || 0) > 24 * 3600 * 1000) localStorage.removeItem(k);
     }
   } catch {}
 }

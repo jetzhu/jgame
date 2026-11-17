@@ -121,3 +121,25 @@ test('a participant arriving before the host gets a retryable error', async () =
   assert.equal(err.fatal, false);
   early.close();
 });
+
+test('a guest can take over hosting with a higher epoch; the old host is superseded', async () => {
+  const host = await makeClient(srv.base);
+  host.cmd({ t: 'host', room: 'p2pRoom4', secret: SECRET, epoch: 0 });
+  await host.waitMsg((m) => m.t === 'hosting');
+  const guest = await makeClient(srv.base);
+  guest.cmd({ t: 'join', room: 'p2pRoom4', name: 'G' });
+  await guest.waitMsg((m) => m.t === 'p2p-joined');
+  host.close();
+  await guest.waitMsg((m) => m.t === 'host-gone');
+  guest.cmd({ t: 'host', room: 'p2pRoom4', secret: SECRET, epoch: 1 }); // takeover on the same socket
+  await guest.waitMsg((m) => m.t === 'hosting');
+  // the original host comes back with its old epoch and must not take hosting back
+  const old = await makeClient(srv.base);
+  old.cmd({ t: 'host', room: 'p2pRoom4', secret: SECRET, epoch: 0 });
+  const err = await old.waitMsg((m) => m.t === 'error');
+  assert.equal(err.code, 'superseded');
+  old.cmd({ t: 'join', room: 'p2pRoom4', token: 'old-host-token', name: 'H' }); // rejoins as a player
+  const pj = await guest.waitMsg((m) => m.t === 'peer-join');
+  assert.equal(pj.data.token, 'old-host-token');
+  [guest, old].forEach((w) => w.close());
+});

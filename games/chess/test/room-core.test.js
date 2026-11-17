@@ -1,7 +1,7 @@
 // Unit tests for the shared GameRoom (used by the server and by player-hosted browsers).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { GameRoom } from '../src/room-core.js';
+import { GameRoom, CLAIM_MS } from '../src/room-core.js';
 
 function setup(tc = 'none') {
   let t = 1_000_000;
@@ -86,4 +86,45 @@ test('flag fall ends the game on time (draw vs lone king)', async () => {
   room.clock.white = 0;
   room.checkFlag();
   assert.deepEqual(last('p1').result, { winner: 'black', reason: 'timeout' });
+});
+
+test('claiming against an absent opponent: countdown, then win or draw', () => {
+  const { room, last, advance } = setup();
+  room.claimSeat('host', 'white', 'A');
+  room.join('p1', { name: 'B' });
+  room.handle('host', { t: 'move', from: 'e2', to: 'e4' });
+  room.handle('p1', { t: 'move', from: 'e7', to: 'e5' });
+  assert.equal(room.claimIn('white'), null); // opponent present
+  room.detach('p1');
+  room.broadcast();
+  assert.equal(last('host').claimIn, CLAIM_MS);
+  room.handle('host', { t: 'claim' }); // too early: ignored
+  assert.equal(room.status, 'playing');
+  advance(CLAIM_MS - 1000);
+  room.join('p7', { token: room.seats.black.token }); // came back: countdown resets
+  assert.equal(room.claimIn('white'), null);
+  room.detach('p7');
+  advance(CLAIM_MS);
+  room.handle('host', { t: 'claim' });
+  assert.deepEqual(room.result, { winner: 'white', reason: 'abandonment' });
+});
+
+test('claim before two moves aborts; claim draw', () => {
+  const a = setup();
+  a.room.claimSeat('host', 'white', 'A');
+  a.room.join('p1', {});
+  a.room.detach('p1');
+  a.advance(CLAIM_MS);
+  a.room.handle('host', { t: 'claim' });
+  assert.deepEqual(a.room.result, { winner: null, reason: 'aborted' });
+
+  const b = setup();
+  b.room.claimSeat('host', 'white', 'A');
+  b.room.join('p1', {});
+  b.room.handle('host', { t: 'move', from: 'e2', to: 'e4' });
+  b.room.handle('p1', { t: 'move', from: 'e7', to: 'e5' });
+  b.room.detach('host');
+  b.advance(CLAIM_MS);
+  b.room.handle('p1', { t: 'claim', draw: true });
+  assert.deepEqual(b.room.result, { winner: null, reason: 'abandoned' });
 });
