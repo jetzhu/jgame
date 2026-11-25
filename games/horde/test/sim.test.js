@@ -131,3 +131,17 @@ test('same seed, same inputs, same game', () => {
   };
   assert.deepEqual(play(), play());
 });
+
+test('holding boost doubles forward speed', () => {
+  const plain = blank();
+  const fast = blank();
+  run(plain, 1, { tx: 0 });
+  run(fast, 1, { tx: 0, boost: true });
+  assert.ok(Math.abs(fast.squad.z / plain.squad.z - 2) < 1e-9, `${fast.squad.z} vs ${plain.squad.z}`);
+  // still slows down near enemies, just from a higher top speed
+  const near = blank();
+  addEnemy(near, 0, 12, 'grunt', 1e9);
+  near.enemies.push(...near.dormant.splice(0));
+  step(near, { tx: 0, boost: true });
+  assert.ok(near.squad.speed < 2 * 6 && near.squad.speed > 0);
+});

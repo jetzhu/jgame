@@ -123,7 +123,12 @@ export function addEnemy(g, x, z, kind, hp) {
 export const dps = (g) => g.squad.count * g.rate * g.dmg;
 
 // ------------------------------------------------------------------ step
-/** Advance one tick. input: { tx } target x for the squad, or null to keep the current target. */
+export const BOOST = 2; // forward speed multiplier while the player holds boost
+
+/**
+ * Advance one tick. input: { tx, boost } — tx is the squad's target x (omit to keep the current
+ * target); boost doubles forward speed. Or null for no input.
+ */
 export function step(g, input) {
   g.events.length = 0;
   if (g.status !== 'play') return;
@@ -148,7 +153,8 @@ export function step(g, input) {
   for (const e of g.enemies) if (e.z > s.z && e.z - s.z < nearest) nearest = e.z - s.z;
   const boss = g.boss;
   if (boss && !boss.dead && boss.active) nearest = Math.min(nearest, boss.z - boss.r - s.z);
-  s.speed = BASE_SPEED * clamp((nearest - 7) / 12, 0.3, 1);
+  s.boost = !!(input && input.boost);
+  s.speed = BASE_SPEED * (s.boost ? BOOST : 1) * clamp((nearest - 7) / 12, 0.3, 1);
   if (boss && !boss.dead && boss.contact) s.speed = 0;
   const prevZ = s.z;
   s.z += s.speed * DT;

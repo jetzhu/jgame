@@ -328,9 +328,11 @@ window.addEventListener('pointermove', pointerMove);
 window.addEventListener('pointerup', pointerUp);
 window.addEventListener('pointercancel', pointerUp);
 const KEYS = { ArrowLeft: -1, KeyA: -1, ArrowRight: 1, KeyD: 1 };
+const BOOST_KEYS = new Set(['ArrowUp', 'KeyW']); // hold to run at double speed
 const held = new Set();
+const boosting = () => [...held].some((k) => BOOST_KEYS.has(k));
 window.addEventListener('keydown', (e) => {
-  if (e.code in KEYS) {
+  if (e.code in KEYS || BOOST_KEYS.has(e.code)) {
     held.add(e.code);
     e.preventDefault();
   } else if ((e.code === 'Escape' || e.code === 'KeyP') && S.screen === 'play' && !S.demo) show('pause');
@@ -342,7 +344,7 @@ window.addEventListener('blur', () => held.clear());
 
 function keyboardInput(dt) {
   let dir = 0;
-  for (const k of held) dir += KEYS[k];
+  for (const k of held) dir += KEYS[k] || 0;
   if (!dir) return;
   input.tx = Math.max(-HALF_W, Math.min(HALF_W, (input.tx ?? S.game.squad.tx) + SCREEN_RIGHT * Math.sign(dir) * 11 * dt));
   if (S.hintUntil) S.hintUntil = performance.now() + 300;
@@ -365,7 +367,7 @@ function frame(now) {
     S.acc += dt;
     let steps = 0;
     while (S.acc >= DT && steps < 6) {
-      step(g, S.demo || S.autoplay ? botInput(g, 0.8) : { tx: input.tx });
+      step(g, S.demo || S.autoplay ? botInput(g, 0.8) : { tx: input.tx, boost: boosting() });
       handleEvents(g);
       S.acc -= DT;
       steps++;

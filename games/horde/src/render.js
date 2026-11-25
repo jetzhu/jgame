@@ -505,6 +505,7 @@ export function createRenderer(canvas) {
 
   // ---------------------------------------------------------------- per-frame sync
   let lastT = performance.now();
+  let stride = 0; // run-cycle phase; advances faster the faster the squad moves
   function render(g) {
     const now = performance.now();
     const dt = Math.min(0.05, (now - lastT) / 1000);
@@ -533,6 +534,7 @@ export function createRenderer(canvas) {
     const n = Math.min(s.count, MAX_SOLDIERS);
     if (n > shown) for (let i = shown; i < n; i++) Object.assign(slots[i], { x: (Math.random() - 0.5) * 0.5, z: -0.6, born: now });
     shown = n;
+    stride += dt * (4 + s.speed * 1.2);
     const R = squadRadius(s.count) * 0.95;
     // soldiers stay on the bridge and on the squad's side of any lane wall
     let lo = -HALF_W + 0.15;
@@ -550,7 +552,7 @@ export function createRenderer(canvas) {
       const tz = Math.sin(th) * rr * 0.8;
       sl.x += (tx - sl.x) * Math.min(1, dt * 8);
       sl.z += (tz - sl.z) * Math.min(1, dt * 8);
-      const hop = s.speed > 0.5 ? Math.abs(Math.sin(time * 11 + i * 1.7)) * 0.09 : 0;
+      const hop = s.speed > 0.5 ? Math.abs(Math.sin(stride + i * 1.7)) * (s.boost ? 0.14 : 0.09) : 0;
       const grow = Math.min(1, (now - sl.born) / 180);
       dummy.position.set(THREE.MathUtils.clamp(s.x + sl.x, lo, hi), hop, s.z + sl.z);
       dummy.rotation.set(0, 0, 0);
