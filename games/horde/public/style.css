@@ -157,6 +157,14 @@ button.big:disabled { opacity: .45; cursor: default; }
 #resStats div { background: rgba(255,255,255,.05); border-radius: 12px; padding: 10px; }
 #resStats b { display: block; font: 900 22px var(--font); }
 #resStats span { color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+.verdict {
+  margin: -4px 0 4px; font: 900 clamp(40px, 13vw, 56px)/1.05 var(--font); letter-spacing: 2px;
+  color: var(--gold); -webkit-text-stroke: 2px #6b3d00; text-shadow: 0 5px 0 #6b3d00, 0 0 24px rgba(255, 197, 49, .45);
+  animation: stamp .45s cubic-bezier(.2, 1.6, .4, 1);
+}
+.verdict.lose { color: #c9d2e3; -webkit-text-stroke-color: #2a3346; text-shadow: 0 5px 0 #2a3346, 0 0 24px rgba(255, 59, 78, .35); }
+@keyframes stamp { from { transform: scale(2.4) rotate(-6deg); opacity: 0; } }
+#resTitle { font-size: 22px; color: var(--muted); }
 .earned { font: 900 34px var(--font); color: var(--gold); margin: 4px 0 6px; }
 .noscript { position: fixed; inset: 0; display: grid; place-items: center; }
 

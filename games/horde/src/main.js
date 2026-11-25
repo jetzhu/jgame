@@ -162,6 +162,10 @@ function showResult() {
   stats.push(['Enemies', g.stats.kills], ['Gates', g.stats.gates]);
   writeSave();
   $('resTitle').textContent = title;
+  const verdict = $('resVerdict');
+  verdict.textContent = endless ? (distance > 0 && save.bestEndless === distance ? 'RECORD!' : 'OVERRUN') : won ? 'VICTORY' : 'DEFEAT';
+  verdict.className = `verdict${won || (endless && save.bestEndless === distance) ? '' : ' lose'}`;
+  void verdict.offsetWidth; // replay the stamp
   $('resStats').innerHTML = stats.map(([k, v]) => `<div><b>${v}</b><span>${k}</span></div>`).join('');
   $('resNext').textContent = endless ? 'Run again' : won ? `Next: Level ${save.level}` : 'Try again';
   $('resNext').onclick = () => startRun(endless ? 'endless' : 'campaign');
