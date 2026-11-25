@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Monorepo for the small no-login browser games at https://jgame.duckdns.org. Plain Node (ESM, Node 24 in CI), no
 framework, no linter. Each `games/<name>/` and `services/<name>/` folder is self-contained (own `package.json`,
 `node_modules`, build and tests). The root `README.md` and `games/chess/README.md` describe features and operations in
-detail. Read them before changing deploy or online-play behavior.
+detail (each game also has its own README). Read them before changing deploy or online-play behavior.
 
 ## Commands
 
@@ -19,6 +19,7 @@ node --test test/room-core.test.js   # a single test file
 node --test --test-name-pattern='resign' test/server.test.js   # a single test by name
 PORT=3200 node server.js             # local run at http://127.0.0.1:3200/
 
+cd games/horde                       # same scripts; npm run build && PORT=3201 node server.js
 cd services/stun && npm test
 ```
 
@@ -37,7 +38,7 @@ retried (`FORCE=1` retries it). Because of this:
 - Change `deploy/caddy/jgame.caddy`, `deploy/systemd/*` and `site/` in the repo, never their installed copies.
 - Deploy log: `journalctl --user -u jgame-deploy`. Live commit: `readlink ~/srv/jgame/current`.
 
-To add a game, follow "Adding a game" in the root README: pick a port (chess uses 3100, STUN health uses 3479), add a
+To add a game, follow "Adding a game" in the root README: pick a port (chess 3100, horde 3101, STUN health 3479), add a
 systemd unit, a `services.txt` line with a health URL, a Caddy `handle_path` route, and a card in `site/index.html`.
 
 ## Chess architecture (`games/chess/`)
@@ -66,3 +67,17 @@ systemd unit, a `services.txt` line with a health URL, a Caddy `handle_path` rou
   `data`, and named `public/` files). When you add a top-level source file or a hand-written `public/` file, add it to
   that list. When you add a bundled dependency, update `THIRD-PARTY-LICENSES.txt` generation and `about.html`.
 - **Server-hosted rooms are in memory only.** A deploy or restart ends them. Player-hosted games survive restarts.
+
+## Horde Gate architecture (`games/horde/`)
+
+- **`src/sim.js` is the entire game**: pure and deterministic (seeded RNG, fixed `DT` = 1/60 s, `step(game, {tx})`), no
+  DOM. `render.js` (three.js) only mirrors sim state each frame and turns `game.events` into effects; `main.js` owns
+  screens, input, HUD and the localStorage save. Keep rules out of the renderer so tests and the bot see them.
+- **Difficulty is tuned with the bot, not by hand.** Campaign levels (`levels.js`) are sized for `expectedStats(level)` in
+  `progress.js` (about one upgrade per level), never the player's own stats; otherwise upgrades cancel out.
+  `test/levels.test.js` simulates a whole career (play, earn, upgrade, retry) with `bot.js` and fails if a level becomes
+  a wall. After changing speeds, horde sizes, rewards or costs, run `npm test` and expect to retune `soak()`/`early()`.
+- Bullets are aggregated: at most ~30 visible bullets per second carry the whole squad's damage, and a bullet keeps its
+  leftover damage after a kill, so total DPS = soldiers × rate × damage regardless of how many bullets are drawn.
+- `#debug` in the page URL exposes `window.__hg` (`startRun`, `ff(secs)` bot fast-forward, `S.autoplay`); `#debug&level=N`
+  starts at level N. Use it with headless Chrome (playwright) to screenshot late-game content.

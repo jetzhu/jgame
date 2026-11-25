@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Horde Gate</title>
+  <meta name="description" content="Grow your squad through gates, crack vaults, and hold the bridge against the goo horde. Free browser game, no login.">
+  <meta name="theme-color" content="#0a1730">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css?v=cd75e2eba8">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- in-game HUD -->
+  <div id="hud" hidden>
+    <div class="pill" id="hudLevel">Level 1</div>
+    <div class="progress"><div id="hudProgress"></div></div>
+    <div class="pill coin" id="hudCoins">0</div>
+    <button class="icon" id="pauseBtn" aria-label="Pause">❚❚</button>
+  </div>
+  <div id="bossBar" hidden><span>BOSS</span><div><i id="bossFill"></i></div></div>
+  <div id="squadTag" hidden>0</div>
+  <div id="floaters"></div>
+  <div id="banner" hidden></div>
+  <div id="hint" hidden>Drag or use ← → to steer</div>
+
+  <!-- title screen -->
+  <section class="screen" id="home">
+    <div class="card title">
+      <h1><span>HORDE</span> GATE</h1>
+      <p class="tag">Grow your squad. Crack the vault. Hold the bridge.</p>
+      <button class="big primary" id="playBtn">Play <small id="playLevel">Level 1</small></button>
+      <div class="row">
+        <button class="big" id="endlessBtn">Endless <small id="bestEndless"></small></button>
+        <button class="big" id="shopBtn">Upgrades <small class="coin" id="homeCoins">0</small></button>
+      </div>
+      <div class="row small">
+        <button class="link" id="soundBtn">🔊 Sound on</button>
+        <a class="link" href="about.html">How to play · About</a>
+        <a class="link" href="/">More games</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- upgrades -->
+  <section class="screen" id="shop" hidden>
+    <div class="card">
+      <h2>Upgrades</h2>
+      <p class="coins-line">You have <b class="coin" id="shopCoins">0</b></p>
+      <div id="shopList"></div>
+      <div class="row">
+        <button class="big" id="shopBack">Back</button>
+        <button class="big primary" id="shopPlay">Play</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- result -->
+  <section class="screen" id="result" hidden>
+    <div class="card">
+      <h2 id="resTitle">Level cleared!</h2>
+      <div id="resStats"></div>
+      <div class="earned">+<b id="resCoins">0</b> <span class="coin"></span></div>
+      <div class="row">
+        <button class="big" id="resHome">Home</button>
+        <button class="big" id="resShop">Upgrades</button>
+      </div>
+      <button class="big primary" id="resNext">Next level</button>
+    </div>
+  </section>
+
+  <!-- pause -->
+  <section class="screen" id="pause" hidden>
+    <div class="card">
+      <h2>Paused</h2>
+      <button class="big primary" id="resumeBtn">Resume</button>
+      <div class="row">
+        <button class="big" id="restartBtn">Restart</button>
+        <button class="big" id="quitBtn">Home</button>
+      </div>
+    </div>
+  </section>
+
+  <noscript><p class="noscript">Horde Gate needs JavaScript and WebGL.</p></noscript>
+  <script type="module" src="app.js?v=cd75e2eba8"></script>
+</body>
+</html>

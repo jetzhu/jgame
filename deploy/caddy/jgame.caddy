@@ -12,6 +12,12 @@ jgame.duckdns.org {
 		reverse_proxy 127.0.0.1:3100
 	}
 
+	# Horde Gate: games/horde (static node server.js, user unit horde-gate.service)
+	redir /horde_gate /horde_gate/ 308
+	handle_path /horde_gate/* {
+		reverse_proxy 127.0.0.1:3101
+	}
+
 	handle {
 		root * /srv/www/jgame
 		file_server

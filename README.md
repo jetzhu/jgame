@@ -5,6 +5,7 @@ Small browser games served at **https://jgame.duckdns.org**, with no login requi
 | Game | Path | Folder |
 |---|---|---|
 | Chess Playground | [/chess_playground/](https://jgame.duckdns.org/chess_playground/) | `games/chess/` |
+| Horde Gate | [/horde_gate/](https://jgame.duckdns.org/horde_gate/) | `games/horde/` |
 
 ## Layout
 
@@ -51,12 +52,12 @@ FORCE=1 ~/srv/jgame/current/deploy/deploy.sh  # redeploy / retry now
 ```
 
 Rollback by hand: push a revert commit (preferred). Or, for an emergency, point the symlink at an older release:
-`ln -sfn releases/<sha> ~/srv/jgame/current && systemctl --user restart chess-playground`.
+`ln -sfn releases/<sha> ~/srv/jgame/current && systemctl --user restart chess-playground horde-gate`.
 
 ## Adding a game
 
 1. Create `games/<name>/` with `package.json` scripts `build` and `test`. Static files go in `public/`.
-2. If it needs a server: listen on a free `127.0.0.1` port (chess uses 3100, so take the next one), add a unit to
+2. If it needs a server: listen on a free `127.0.0.1` port (chess 3100, horde 3101, STUN health 3479; take the next one), add a unit to
    `deploy/systemd/`, and add a line to `deploy/services.txt` with a health URL.
 3. Add a route to `deploy/caddy/jgame.caddy` (`redir /<path> /<path>/ 308` + `handle_path /<path>/* { reverse_proxy 127.0.0.1:<port> }`).
 4. Add a card to `site/index.html`.
@@ -64,4 +65,4 @@ Rollback by hand: push a revert commit (preferred). Or, for an emergency, point 
 
 ## License
 
-GPL-3.0-or-later (see `LICENSE`). Chess bundles GPL components (Stockfish, chessground). Its About page lists the credits.
+GPL-3.0-or-later (see `LICENSE`). Chess bundles GPL components (Stockfish, chessground); Horde Gate bundles three.js (MIT). Each game's About page lists its credits.

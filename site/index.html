@@ -21,6 +21,10 @@
     .game:hover { background: var(--card-hover); transform: translateY(-2px); }
     .thumb { aspect-ratio: 16/9; display: grid; place-items: center;
       background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 4.5' preserveAspectRatio='none' shape-rendering='crispEdges'><rect width='8' height='5' fill='%23ebecd0'/><path fill='%23739552' d='M1 0h1v1h-1zM3 0h1v1h-1zM5 0h1v1h-1zM7 0h1v1h-1zM0 1h1v1h-1zM2 1h1v1h-1zM4 1h1v1h-1zM6 1h1v1h-1zM1 2h1v1h-1zM3 2h1v1h-1zM5 2h1v1h-1zM7 2h1v1h-1zM0 3h1v1h-1zM2 3h1v1h-1zM4 3h1v1h-1zM6 3h1v1h-1zM1 4h1v1h-1zM3 4h1v1h-1zM5 4h1v1h-1zM7 4h1v1h-1z'/></svg>") 0 0 / 100% 100%; }
+    .thumb.horde { background: linear-gradient(180deg, #0a1730 0 38%, transparent 38%),
+      linear-gradient(90deg, #1f86ff 0 18%, #9aa3b1 18% 34%, #e0453a 34% 66%, #9aa3b1 66% 82%, #ffbf1f 82%); gap: 0; }
+    .thumb.horde b { font-size: 2.1rem; font-family: "Arial Black", system-ui, sans-serif; color: #ffc531; letter-spacing: 1px;
+      text-shadow: 0 3px 0 #6b3d00, 2px 0 0 #6b3d00, -2px 0 0 #6b3d00, 0 -2px 0 #6b3d00; }
     .thumb b { font-size: 4.2rem; line-height: 1; color: #fff; text-shadow: 0 2px 0 #262421, 0 0 1px #262421, 2px 0 0 #262421, -2px 0 0 #262421, 0 -2px 0 #262421; }
     .info { padding: 14px 16px 16px; }
     .info h3 { margin: 0 0 4px; font-size: 1.15rem; }
@@ -46,6 +50,14 @@
           <h3>Chess Playground</h3>
           <p>Play against the computer at 10 levels, or play a friend online with a share link or on the same device.</p>
           <div class="tags"><span>1 player</span><span>2 players</span><span>Online</span></div>
+        </div>
+      </a>
+      <a class="game" href="/horde_gate/">
+        <div class="thumb horde"><b>HORDE GATE</b></div>
+        <div class="info">
+          <h3>Horde Gate</h3>
+          <p>Steer your squad through gates to grow it, crack vaults for gold, and hold the bridge against the goo horde. Upgrades, bosses and an endless mode.</p>
+          <div class="tags"><span>1 player</span><span>Action</span><span>Mobile friendly</span></div>
         </div>
       </a>
     </div>

@@ -1,0 +1,24 @@
+[Unit]
+Description=Horde Gate (https://jgame.duckdns.org/horde_gate/)
+After=network.target
+
+[Service]
+# Static file server only; the game runs in the browser. deploy/deploy.sh swaps the "current" symlink and restarts.
+WorkingDirectory=%h/srv/jgame/current/games/horde
+ExecStart=/usr/bin/node server.js
+Environment=HOST=127.0.0.1 PORT=3101 NODE_ENV=production
+Restart=always
+RestartSec=2
+# Always yield to whatever else this machine is doing.
+Nice=10
+CPUWeight=20
+IOWeight=20
+MemoryHigh=100M
+MemoryMax=150M
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=default.target

@@ -2,3 +2,4 @@
 # deploy.sh restarts each after a release and rolls back if the health check fails.
 chess-playground.service http://127.0.0.1:3100/healthz
 jgame-stun.service http://127.0.0.1:3479/healthz
+horde-gate.service http://127.0.0.1:3101/healthz

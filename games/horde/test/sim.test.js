@@ -1,0 +1,133 @@
+// Rules of the simulation, on hand-built scenes (no level generator noise).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createGame, step, applyGate, addEnemy, finishMultiplier, DT, BULLET_SPEED, HALF_W } from '../src/sim.js';
+
+/** An empty campaign game: no generated content, a long track, the squad at the center. */
+function blank(opts = {}) {
+  const g = createGame({ level: 1, ...opts });
+  Object.assign(g, { enemies: [], dormant: [], gates: [], vaults: [], walls: [], crates: [], barrels: [], boss: null, length: 1e6 });
+  return g;
+}
+const run = (g, secs, input = null) => {
+  for (let i = 0; i < secs / DT && g.status === 'play'; i++) step(g, input);
+};
+
+test('gate math rounds and clamps', () => {
+  assert.equal(applyGate(10, '+', 5), 15);
+  assert.equal(applyGate(10, '-', 15), 0);
+  assert.equal(applyGate(10, 'x', 3), 30);
+  assert.equal(applyGate(11, '/', 2), 5);
+  assert.equal(applyGate(9000, 'x', 2), 9999);
+});
+
+test('crossing a gate applies it once; the rest of its choice row disappears', () => {
+  const g = blank({ start: 10 });
+  g.gates.push({ id: 1, x0: -HALF_W, x1: 0, z: 3, op: '+', value: 7, group: 9, used: false });
+  g.gates.push({ id: 2, x0: 0, x1: HALF_W, z: 3, op: 'x', value: 2, group: 9, used: false });
+  run(g, 2, { tx: -2 });
+  assert.equal(g.squad.count, 17);
+  assert.ok(g.gates.every((x) => x.used));
+});
+
+test('one bullet carries leftover damage through several weak enemies', () => {
+  const g = blank({ start: 1 });
+  g.squad.count = 0; // nobody fires; we place the bullet by hand
+  for (let i = 0; i < 3; i++) addEnemy(g, 0, 4.4 + i * 0.1, 'grunt', 1);
+  g.enemies.push(...g.dormant.splice(0));
+  g.bullets.push({ x: 0, z: 4, vx: 0, dmg: 2.5, life: 1 });
+  g.squad.count = 1;
+  g.rate = 0;
+  step(g, null);
+  const alive = g.enemies.filter((e) => e.hp > 0);
+  assert.equal(alive.length, 1, 'two enemies killed by one bullet');
+  assert.ok(alive[0].hp < 1, 'the third is wounded by the remainder');
+});
+
+test('total damage dealt per second scales with the squad, not with bullet count', () => {
+  const dmgIn = (count) => {
+    const g = blank({ start: count });
+    g.vaults.push({ id: 1, x0: -HALF_W, x1: HALF_W, z: 20, depth: 1, hp: 1e9, maxHp: 1e9 });
+    g.squad.z = 0;
+    for (let i = 0; i < 120; i++) {
+      g.squad.z = 0; // hold still so every bullet lands
+      step(g, null);
+    }
+    return 1e9 - g.vaults[0].hp;
+  };
+  const a = dmgIn(10);
+  const b = dmgIn(100);
+  assert.ok(Math.abs(b / a - 10) < 1.5, `ratio ${b / a}`);
+});
+
+test('a closed vault blocks its lane and the gates behind it; shooting it open unlocks them', () => {
+  const g = blank({ start: 10 });
+  g.vaults.push({ id: 5, x0: 1.6, x1: 4.4, z: 8, depth: 1.4, hp: 1e9, maxHp: 1e9 });
+  g.gates.push({ id: 6, x0: 1.5, x1: 4.5, z: 10, op: '+', value: 50, lockedBy: 5, used: false });
+  while (g.squad.z < 8) step(g, { tx: 3 });
+  assert.ok(g.squad.x < 1.6, 'pushed out of the vault lane');
+  run(g, 2, { tx: 3 });
+  assert.equal(g.squad.count, 10, 'the locked gate did nothing');
+
+  const h = blank({ start: 40 });
+  h.vaults.push({ id: 5, x0: 1.6, x1: 4.4, z: 20, depth: 1.4, hp: 30, maxHp: 30 });
+  h.gates.push({ id: 6, x0: 1.5, x1: 4.5, z: 22, op: '+', value: 50, lockedBy: 5, used: false });
+  run(h, 6, { tx: 3 });
+  assert.equal(h.squad.count, 90);
+});
+
+test('walls keep the squad in (or out of) a lane', () => {
+  const g = blank();
+  g.walls.push({ x: 1.5, z0: 0, z1: 100 });
+  run(g, 2, { tx: 3 });
+  assert.ok(g.squad.x < 1.5);
+});
+
+test('enemies that reach the squad take soldiers with them; zero soldiers loses', () => {
+  const g = blank({ start: 3 });
+  g.rate = 0; // no shooting
+  for (let i = 0; i < 5; i++) addEnemy(g, 0, 6 + i, 'grunt', 1);
+  run(g, 10);
+  assert.equal(g.status, 'lost');
+  assert.equal(g.squad.count, 0);
+});
+
+test('reaching the finish wins; the multiplier grows with survivors', () => {
+  const g = blank({ start: 30 });
+  g.length = 20;
+  run(g, 10);
+  assert.equal(g.status, 'won');
+  assert.ok(g.result.mult >= 2);
+  assert.equal(finishMultiplier(0, 1), 1);
+  assert.ok(finishMultiplier(1000, 1) === 5);
+  assert.ok(finishMultiplier(30, 10) < finishMultiplier(30, 1) + 1);
+});
+
+test('a pump gate improves while shot', () => {
+  const g = blank({ start: 20 });
+  g.gates.push({ id: 7, x0: -1.5, x1: 1.5, z: 25, op: '-', value: 3, pump: true, acc: 0, step: 5, used: false });
+  for (let i = 0; i < 90; i++) {
+    g.squad.z = 0;
+    step(g, null);
+  }
+  const gt = g.gates[0];
+  assert.equal(gt.op, '+');
+  assert.ok(gt.value > 1);
+});
+
+test('bullets fly straight at BULLET_SPEED', () => {
+  const g = blank({ start: 1 });
+  g.rate = 0;
+  g.bullets.push({ x: 0, z: 0, vx: 0, dmg: 1, life: 1 });
+  step(g, null);
+  assert.ok(Math.abs(g.bullets[0].z - BULLET_SPEED * DT) < 1e-9);
+});
+
+test('same seed, same inputs, same game', () => {
+  const play = () => {
+    const g = createGame({ level: 7 });
+    for (let i = 0; i < 1200; i++) step(g, { tx: Math.sin(i / 50) * 3 });
+    return [g.squad.count, g.squad.z.toFixed(6), g.stats.kills, g.enemies.length];
+  };
+  assert.deepEqual(play(), play());
+});

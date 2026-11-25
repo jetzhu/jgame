@@ -1,0 +1,17 @@
+{
+  "name": "horde-gate",
+  "version": "1.0.0",
+  "description": "Horde Gate: lane-shooter squad game for jgame.duckdns.org",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'",
+    "build": "node build.mjs",
+    "start": "node server.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "three": "^0.187.0"
+  }
+}
