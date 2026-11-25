@@ -30,11 +30,16 @@ function placeHorde(g, budget, x0, x1, zStart) {
   let i = 0;
   for (let r = 0; r < rows && i < n; r++)
     for (let c = 0; c < cols && i < n; c++, i++) {
-      const brute = d >= 4 && i % 15 === 7;
       const x = x0 + pad + c * SPACING + (rand() - 0.5) * 0.12;
       const z = zStart + r * SPACING + (rand() - 0.5) * 0.12;
-      addEnemy(g, x, z, brute ? 'brute' : 'grunt', brute ? hp * 6 : hp);
+      addEnemy(g, x, z, 'grunt', hp);
     }
+  // elites lead the horde out, a couple of steps in front of it
+  const elites = d < 2 && !g.gen.tutorialElite ? 0 : d < 6 ? 1 : d < 12 ? 2 : 3;
+  for (let k = 0; k < elites && budget > 40; k++) {
+    const x = x0 + ((k + 1) / (elites + 1)) * (x1 - x0);
+    addEnemy(g, x, zStart - 1.6 - rand() * 0.8, 'elite', Math.ceil(g.gen.E * g.gen.perSoldier * 0.6));
+  }
   return rows * SPACING;
 }
 
@@ -182,7 +187,9 @@ SEGMENTS.collapse = function (g, z0) {
   g.slabs.push(slab);
   // the garage horde shuffles out more slowly than an open-road horde
   const before = g.dormant.length;
+  g.gen.tutorialElite = true;
   placeHorde(g, soak(g.gen, 2.2), -HALF_W + 0.3, HALF_W - 0.3, sz0 + 1);
+  g.gen.tutorialElite = false;
   for (let i = before; i < g.dormant.length; i++) {
     g.dormant[i].speed *= 0.6;
     g.dormant[i].garage = slab.id;

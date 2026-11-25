@@ -63,6 +63,11 @@ button.icon {
 @keyframes tagUp { 40% { transform: translate(-50%, -100%) scale(1.35); background: var(--green); } }
 @keyframes tagDown { 40% { transform: translate(-50%, -100%) scale(.85); background: var(--red); } }
 
+.ebar { position: fixed; left: 0; top: 0; transform: translate(-50%, -100%); pointer-events: none; text-align: center;
+  font: 900 13px var(--font); color: #fff; -webkit-text-stroke: 1px rgba(10, 20, 40, .8); will-change: left, top; }
+.ebar i { display: block; width: 46px; height: 6px; margin-top: 1px; border-radius: 3px; background: rgba(30, 0, 8, .75); border: 1px solid #1a0a10; overflow: hidden; }
+.ebar i b { display: block; height: 100%; background: linear-gradient(90deg, #ff2d55, #ff8a5c); }
+
 #floaters { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
 .floater {
   position: absolute; transform: translate(-50%, -50%); font: 900 30px var(--font); color: #fff;

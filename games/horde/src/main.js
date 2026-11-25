@@ -88,6 +88,7 @@ function show(screen) {
   const playing = screen === 'play' || screen === 'pause' || (screen === 'result' && !S.demo);
   $('hud').hidden = !playing;
   $('squadTag').hidden = !playing;
+  $('eliteBars').hidden = !playing;
   if (screen !== 'play') $('hint').hidden = true;
   if (screen === 'home') refreshHome();
   if (screen === 'shop') refreshShop();
@@ -304,6 +305,7 @@ function updateHud(g) {
     S.shownCount = s.count;
   }
   tag.textContent = s.count;
+  updateEliteBars(g);
   const b = g.boss;
   $('bossBar').hidden = !(b && b.active && !b.dead && !S.demo);
   if (b && b.active) $('bossFill').style.width = `${(b.hp / b.maxHp) * 100}%`;
@@ -311,6 +313,34 @@ function updateHud(g) {
     $('hint').hidden = true;
     S.hintUntil = 0;
   }
+}
+
+// HP bars over the nearest elites (a small pool of DOM elements).
+const eliteBars = [];
+function updateEliteBars(g) {
+  const s = g.squad;
+  const list = [];
+  for (const e of g.enemies) if (e.kind === 'elite' && e.hp > 0 && e.z > s.z - 1 && e.z - s.z < 45) list.push(e);
+  for (let i = g.dormant.length - 1; i >= 0 && g.dormant[i].z - s.z < 45; i--) if (g.dormant[i].kind === 'elite') list.push(g.dormant[i]);
+  list.sort((a, b) => a.z - b.z);
+  const n = Math.min(list.length, 6);
+  while (eliteBars.length < n) {
+    const el = document.createElement('div');
+    el.className = 'ebar';
+    el.innerHTML = '<span></span><i><b></b></i>';
+    $('eliteBars').append(el);
+    eliteBars.push(el);
+  }
+  eliteBars.forEach((el, i) => {
+    const e = list[i];
+    const p = e && renderer.project(e.x, 1.55, e.z);
+    el.hidden = !e || !p.on || S.demo;
+    if (el.hidden) return;
+    el.style.left = `${p.x}px`;
+    el.style.top = `${p.y}px`;
+    el.firstChild.textContent = Math.ceil(e.hp);
+    el.lastChild.firstChild.style.width = `${(e.hp / e.maxHp) * 100}%`;
+  });
 }
 
 // ------------------------------------------------------------------ input

@@ -106,19 +106,23 @@ function sortDormant(g) {
   g.dormant.sort((a, b) => b.z - a.z); // farthest first; pop() takes the nearest
 }
 
+/** kind: 'grunt' (the horde) or 'elite' (big, tough, walks out ahead of its horde, has an HP bar). */
 export function addEnemy(g, x, z, kind, hp) {
-  const brute = kind === 'brute';
-  g.dormant.push({
+  const elite = kind === 'elite';
+  const e = {
     id: newId(g),
     x,
     z,
     hp,
     maxHp: hp,
     kind,
-    r: brute ? 0.55 : ENEMY_R,
-    power: brute ? 3 : 1,
-    speed: brute ? 1.7 : 2.4,
-  });
+    r: elite ? 0.6 : ENEMY_R,
+    power: elite ? 6 : 1,
+    speed: elite ? 1.9 : 2.4,
+    hitAt: -1, // sim time of the last non-lethal hit (the renderer flashes it)
+  };
+  g.dormant.push(e);
+  return e;
 }
 
 /** Seconds of full-squad fire a target with `hp` would absorb. */
@@ -366,11 +370,14 @@ function damage(g, hit, b) {
     const used = Math.min(b.dmg, o.hp);
     o.hp -= used;
     b.dmg -= used;
-    if (o.hp > 1e-9) return;
+    if (o.hp > 1e-9) {
+      o.hitAt = g.t;
+      return;
+    }
     o.hp = 0;
     if (hit.kind === 'enemy') {
       g.stats.kills++;
-      g.events.push({ t: 'kill', x: o.x, z: o.z, brute: o.kind === 'brute' });
+      g.events.push({ t: 'kill', x: o.x, z: o.z, elite: o.kind === 'elite' });
     } else if (hit.kind === 'crate') {
       o.dead = true;
       openCrate(g, o);
@@ -447,7 +454,7 @@ function explodeBarrel(g, b) {
       if (e.hp <= 0) {
         kills++;
         g.stats.kills++;
-        g.events.push({ t: 'kill', x: e.x, z: e.z, brute: e.kind === 'brute', quiet: true });
+        g.events.push({ t: 'kill', x: e.x, z: e.z, elite: e.kind === 'elite', quiet: true });
       }
     }
   }

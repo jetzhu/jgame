@@ -20,7 +20,8 @@ const COLORS = {
   soldierBody: 0x1b3a8a,
   skin: 0xf2c49b,
   enemy: 0xe0453a,
-  brute: 0x8e1c4a,
+  elite: 0x8e1336,
+  stone: 0xa9a49b,
   bullet: 0xffd34d,
   good: '#1f86ff',
   gold: '#ffbf1f',
@@ -301,7 +302,32 @@ export function createRenderer(canvas) {
     scene.add(m);
   }
   const cEnemy = new THREE.Color(COLORS.enemy);
-  const cBrute = new THREE.Color(COLORS.brute);
+  const cElite = new THREE.Color(COLORS.elite);
+  const cFlash = new THREE.Color(0xffffff);
+  const cStone = new THREE.Color(COLORS.stone);
+  const cDust = new THREE.Color(0xd9d4ca);
+
+  // Elites wear horns (instanced separately: there are only a few).
+  const MAX_ELITES = 64;
+  const horns = new THREE.InstancedMesh(
+    mergeGeometries([
+      new THREE.ConeGeometry(0.07, 0.26, 8).rotateZ(0.5).translate(-0.17, 0.72, 0),
+      new THREE.ConeGeometry(0.07, 0.26, 8).rotateZ(-0.5).translate(0.17, 0.72, 0),
+    ]),
+    new THREE.MeshLambertMaterial({ color: 0xf1e4c4 }),
+    MAX_ELITES,
+  );
+  horns.frustumCulled = false;
+  horns.count = 0;
+  scene.add(horns);
+
+  // Kills turn to stone for a moment, then crumble (see onEvent 'kill').
+  const MAX_STONES = 700;
+  const stones = [];
+  const stoneMesh = new THREE.InstancedMesh(enemyGeo, new THREE.MeshLambertMaterial({ color: COLORS.stone }), MAX_STONES);
+  stoneMesh.frustumCulled = false;
+  stoneMesh.count = 0;
+  scene.add(stoneMesh);
   const cHurt = new THREE.Color(0xffb0a0);
 
   const bullets = new THREE.InstancedMesh(
@@ -618,7 +644,9 @@ export function createRenderer(canvas) {
   // ---------------------------------------------------------------- events -> effects
   function onEvent(e) {
     if (e.t === 'kill') {
-      if (Math.random() < (e.quiet ? 0.5 : 0.8)) burst(e.x, 0.4, e.z, e.brute ? 10 : 3, e.brute ? cBrute : cEnemy, 3, 0.13, 0.45);
+      if (stones.length < MAX_STONES) stones.push({ x: e.x, z: e.z, sc: e.elite ? 2 : 1, t0: performance.now(), life: e.elite ? 380 : 260, elite: e.elite });
+      else burst(e.x, 0.4, e.z, 2, cStone, 3, 0.13, 0.45);
+      if (e.elite) shake = Math.max(shake, 0.18);
     } else if (e.t === 'clash') {
       burst(e.x, 0.5, e.z, 4, new THREE.Color(COLORS.soldier), 3, 0.12, 0.5);
       shake = Math.max(shake, e.boss ? 0.25 : 0.12);
@@ -729,17 +757,22 @@ export function createRenderer(canvas) {
     let k = 0;
     const zMin = s.z - VIEW_BEHIND;
     const zMax = s.z + VIEW_AHEAD;
+    let nh = 0;
     const putEnemy = (e) => {
       if (k >= MAX_ENEMIES || e.z < zMin || e.z > zMax || e.hp <= 0) return;
       const wob = Math.sin(time * 9 + e.id) * 0.06;
-      const sc = e.kind === 'brute' ? 1.9 : 1;
+      const elite = e.kind === 'elite';
+      const sc = elite ? 2 : 1;
       dummy.position.set(e.x, Math.abs(wob) * 0.6, e.z);
       dummy.rotation.set(0, 0, wob);
       dummy.scale.set(sc * (1 + wob), sc * (1 - wob), sc);
       dummy.updateMatrix();
       enemies.setMatrixAt(k, dummy.matrix);
       enemyEyes.setMatrixAt(k, dummy.matrix);
-      enemies.setColorAt(k, e.hp < e.maxHp ? tmpColor.copy(e.kind === 'brute' ? cBrute : cEnemy).lerp(cHurt, 0.35) : e.kind === 'brute' ? cBrute : cEnemy);
+      const base = elite ? cElite : cEnemy;
+      if (g.t - e.hitAt < 0.07) enemies.setColorAt(k, tmpColor.copy(base).lerp(cFlash, 0.75));
+      else enemies.setColorAt(k, e.hp < e.maxHp && !elite ? tmpColor.copy(base).lerp(cHurt, 0.35) : base);
+      if (elite && nh < MAX_ELITES) horns.setMatrixAt(nh++, dummy.matrix);
       k++;
     };
     for (const e of g.enemies) putEnemy(e);
@@ -749,6 +782,31 @@ export function createRenderer(canvas) {
       putEnemy(e);
     }
     enemies.count = enemyEyes.count = k;
+    horns.count = nh;
+    horns.instanceMatrix.needsUpdate = true;
+
+    // stone statues: hold, then crumble into chunks and dust
+    let ns = 0;
+    for (let i = stones.length - 1; i >= 0; i--) {
+      const st = stones[i];
+      const age = now - st.t0;
+      if (age > st.life) {
+        const big = st.elite;
+        burst(st.x, 0.4 * st.sc, st.z, big ? 14 : 2, cStone, big ? 4 : 2.5, big ? 0.22 : 0.13, 0.55, 3);
+        if (big || Math.random() < 0.35) burst(st.x, 0.3, st.z, big ? 8 : 1, cDust, 1.2, big ? 0.5 : 0.32, 0.7, 1);
+        stones[i] = stones[stones.length - 1];
+        stones.pop();
+        continue;
+      }
+      const sq = 1 - 0.15 * (age / st.life);
+      dummy.position.set(st.x, 0, st.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(st.sc, st.sc * sq, st.sc);
+      dummy.updateMatrix();
+      stoneMesh.setMatrixAt(ns++, dummy.matrix);
+    }
+    stoneMesh.count = ns;
+    stoneMesh.instanceMatrix.needsUpdate = true;
     enemies.instanceMatrix.needsUpdate = enemyEyes.instanceMatrix.needsUpdate = true;
     if (enemies.instanceColor) enemies.instanceColor.needsUpdate = true;
 
@@ -933,6 +991,7 @@ export function createRenderer(canvas) {
     if (finishObj) disposeObj(finishObj);
     finishObj = null;
     parts.length = 0;
+    stones.length = 0;
     shown = 0;
     shake = 0;
   }
