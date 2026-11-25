@@ -524,7 +524,9 @@ export function createRenderer(canvas) {
 
     // bridge pieces travel with the camera; the deck texture scrolls
     bridge.position.z = s.z + DECK_LEN / 2 - 20;
-    deckTex.offset.y = (bridge.position.z - DECK_LEN / 2) / 8;
+    // The deck's v coordinate grows toward -z, so the texture must scroll back as the deck moves
+    // forward with the squad; that keeps the stripes fixed to the world and passing under the squad.
+    deckTex.offset.y = -bridge.position.z / 8;
     sea.position.z = s.z;
 
     // soldiers
