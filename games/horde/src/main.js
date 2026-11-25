@@ -302,6 +302,8 @@ function updateHud(g) {
 }
 
 // ------------------------------------------------------------------ input
+// The camera looks down +z from behind the squad, which puts world -x on the right of the screen.
+const SCREEN_RIGHT = -1;
 const input = { tx: null, keys: 0, dragging: false, startX: 0, startTx: 0 };
 const canvas = $('game');
 function pointerDown(e) {
@@ -315,7 +317,7 @@ function pointerDown(e) {
 function pointerMove(e) {
   if (!input.dragging) return;
   const w = Math.min(window.innerWidth, 700);
-  input.tx = Math.max(-HALF_W, Math.min(HALF_W, input.startTx + ((e.clientX - input.startX) / w) * 2 * HALF_W * 1.3));
+  input.tx = Math.max(-HALF_W, Math.min(HALF_W, input.startTx + SCREEN_RIGHT * ((e.clientX - input.startX) / w) * 2 * HALF_W * 1.3));
   if (S.hintUntil) S.hintUntil = performance.now() + 300;
 }
 function pointerUp() {
@@ -342,7 +344,7 @@ function keyboardInput(dt) {
   let dir = 0;
   for (const k of held) dir += KEYS[k];
   if (!dir) return;
-  input.tx = Math.max(-HALF_W, Math.min(HALF_W, (input.tx ?? S.game.squad.tx) + Math.sign(dir) * 11 * dt));
+  input.tx = Math.max(-HALF_W, Math.min(HALF_W, (input.tx ?? S.game.squad.tx) + SCREEN_RIGHT * Math.sign(dir) * 11 * dt));
   if (S.hintUntil) S.hintUntil = performance.now() + 300;
 }
 
