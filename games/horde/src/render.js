@@ -60,9 +60,12 @@ function bigText(ctx, text, x, y, size, fill = '#fff') {
   ctx.fillText(text, x, y);
 }
 
-function drawGate(t, label, color, locked) {
+// Plain gates are translucent with a white frame. Pump gates (they change when shot) are solid,
+// with a hazard-striped frame and a caption, so the two never look alike.
+function drawGate(t, label, color, locked, pump) {
   const { c, ctx } = t;
   ctx.clearRect(0, 0, c.width, c.height);
+  if (pump) return drawPumpGate(t, label, color);
   ctx.globalAlpha = locked ? 0.55 : 0.82;
   ctx.fillStyle = color;
   roundRect(ctx, 6, 6, c.width - 12, c.height - 12, 22);
@@ -77,6 +80,59 @@ function drawGate(t, label, color, locked) {
     ctx.fillText('🔒', c.width - 44, 44);
   }
   t.tex.needsUpdate = true;
+}
+
+function drawPumpGate(t, label, color) {
+  const { c, ctx } = t;
+  const W = c.width;
+  const H = c.height;
+  // striped frame
+  roundRect(ctx, 4, 4, W - 8, H - 8, 18);
+  ctx.save();
+  ctx.clip();
+  ctx.fillStyle = '#1b1b1b';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ffd21f';
+  for (let x = -H; x < W + H; x += 28) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + 14, 0);
+    ctx.lineTo(x + 14 - H, H);
+    ctx.lineTo(x - H, H);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+  // solid face
+  ctx.fillStyle = color;
+  roundRect(ctx, 18, 18, W - 36, H - 36, 10);
+  ctx.fill();
+  bigText(ctx, label, W / 2, H / 2 - 8, label.length > 4 ? 56 : 72);
+  ctx.font = '900 19px "Arial Black", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('SHOOT TO RAISE', W / 2, H - 34);
+  t.tex.needsUpdate = true;
+}
+
+function targetTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ['#e8262f', '#ffffff', '#e8262f', '#ffffff', '#e8262f'].forEach((col, i) => {
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(64, 64, 62 - i * 12.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.strokeStyle = '#1b1b1b';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(64, 64, 61, 0, Math.PI * 2);
+  ctx.stroke();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 function drawVault(t, hp, maxHp) {
@@ -288,6 +344,9 @@ export function createRenderer(canvas) {
   };
   const postGeo = new THREE.BoxGeometry(0.16, 2.3, 0.16).translate(0, 1.15, 0);
   const postMat = new THREE.MeshLambertMaterial({ color: 0xe8edf5 });
+  const pumpPostMat = new THREE.MeshLambertMaterial({ color: 0xff8a1f });
+  const targetGeo = new THREE.CircleGeometry(0.42, 28);
+  const targetMat = new THREE.MeshBasicMaterial({ map: targetTexture(), side: THREE.DoubleSide });
 
   function makeGate(gt) {
     const w = gt.x1 - gt.x0;
@@ -301,19 +360,28 @@ export function createRenderer(canvas) {
     panel.rotation.y = Math.PI; // face the camera (which looks toward +z)
     group.add(panel);
     for (const x of [-w / 2 + 0.1, w / 2 - 0.1]) {
-      const p = new THREE.Mesh(postGeo, postMat);
+      const p = new THREE.Mesh(postGeo, gt.pump ? pumpPostMat : postMat);
       p.position.x = x;
       group.add(p);
     }
+    let target = null;
+    if (gt.pump) {
+      // a bullseye on top: "shoot me"
+      target = new THREE.Mesh(targetGeo, targetMat);
+      target.position.set(0, 2.45, 0);
+      target.rotation.y = Math.PI;
+      group.add(target);
+      panel.material.opacity = 1;
+    }
     group.position.set((gt.x0 + gt.x1) / 2, 0, gt.z);
     scene.add(group);
-    return { obj: group, kind: 'gate', t, panel, key: '' };
+    return { obj: group, kind: 'gate', t, panel, target, key: '' };
   }
   function gateLook(gt, g) {
     const lock = gt.lockedBy && g.vaults.find((v) => v.id === gt.lockedBy);
     const locked = !!(lock && lock.hp > 0);
     const color = locked ? COLORS.locked : !gateGood(gt) ? COLORS.bad : gt.gold ? COLORS.gold : COLORS.good;
-    return { label: gateLabel(gt), color, locked };
+    return { label: gateLabel(gt), color, locked, pump: !!gt.pump };
   }
 
   const vaultBodyMat = new THREE.MeshLambertMaterial({ color: 0x8a95a5 });
@@ -389,7 +457,7 @@ export function createRenderer(canvas) {
   }
 
   // Geometries/materials shared by many objects; everything else belongs to one object.
-  const shared = new Set([postGeo, postMat, vaultBodyMat, wallMat, crateGeo, barrelGeo, barrelMat, bandGeo, bandMat]);
+  const shared = new Set([postGeo, postMat, pumpPostMat, targetGeo, targetMat, vaultBodyMat, wallMat, crateGeo, barrelGeo, barrelMat, bandGeo, bandMat]);
   function disposeObj(obj) {
     scene.remove(obj);
     obj.traverse((m) => {
@@ -618,9 +686,9 @@ export function createRenderer(canvas) {
       if (!o) objs.set(key, (o = makeGate(gt)));
       seen.add(key);
       const look = gateLook(gt, g);
-      const lk = `${look.label}|${look.color}|${look.locked}`;
+      const lk = `${look.label}|${look.color}|${look.locked}|${look.pump}`;
       if (o.key !== lk) {
-        drawGate(o.t, look.label, look.color, look.locked);
+        drawGate(o.t, look.label, look.color, look.locked, look.pump);
         o.key = lk;
       }
       if (gt.used) {
@@ -632,9 +700,12 @@ export function createRenderer(canvas) {
           o.obj.scale.setScalar(Math.max(0.001, 1 - (o.fade = (o.fade || 0) + dt * 4)));
         }
         o.obj.visible = p < 1 || !o.popAt ? o.obj.scale.x > 0.01 : false;
-      } else if (o.pumpAt) {
-        const p = Math.max(0, 1 - (now - o.pumpAt) / 150);
+      } else if (o.target) {
+        // the bullseye jolts and the board bumps each time a hit raises the number
+        const p = o.pumpAt ? Math.max(0, 1 - (now - o.pumpAt) / 150) : 0;
         o.obj.scale.setScalar(1 + p * 0.12);
+        o.target.rotation.z = Math.sin(time * 3) * 0.15 + p * 0.6;
+        o.target.scale.setScalar(1 + p * 0.35);
       }
     }
     for (const v of g.vaults) {

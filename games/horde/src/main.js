@@ -74,6 +74,7 @@ function startRun(mode) {
   renderer.reset();
   sound.unlock();
   show('play');
+  $('hint').textContent = matchMedia('(pointer: coarse)').matches ? 'Drag to steer' : 'Drag or use ← → to steer · hold ↑ to run faster';
   $('hint').hidden = false;
   S.hintUntil = performance.now() + 3500;
   if (mode === 'endless') banner('ENDLESS', 'gold');
