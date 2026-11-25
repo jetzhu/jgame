@@ -76,6 +76,89 @@ function drawSackTag(t, hp) {
   t.tex.needsUpdate = true;
 }
 
+// Steel face of a strongbox: brushed plate, rivets, hazard bands, the HP, and dents as it weakens.
+function hazard(ctx, x, y, w, h) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.fillStyle = '#1b1b1b';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#ffc61f';
+  for (let k = x - h; k < x + w + h; k += 32) {
+    ctx.beginPath();
+    ctx.moveTo(k, y);
+    ctx.lineTo(k + 16, y);
+    ctx.lineTo(k + 16 - h, y + h);
+    ctx.lineTo(k - h, y + h);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function drawSteel(t, hp, maxHp, seed) {
+  const { c, ctx } = t;
+  const W = c.width;
+  const H = c.height;
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, '#b9c2cc');
+  g.addColorStop(0.5, '#8d97a3');
+  g.addColorStop(1, '#a7b0bb');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(255,255,255,.08)';
+  for (let y = 0; y < H; y += 3) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+  hazard(ctx, 0, 0, W, 26);
+  hazard(ctx, 0, H - 26, W, 26);
+  ctx.fillStyle = '#5f6873';
+  for (const x of [16, W - 16]) for (let y = 44; y < H - 30; y += 46) ctx.fillRect(x - 5, y - 5, 10, 10);
+  let a = seed * 7919 + 17;
+  const rnd = () => ((a = (a * 9301 + 49297) % 233280) / 233280);
+  const dents = Math.floor((1 - hp / maxHp) * 9);
+  for (let k = 0; k < dents; k++) {
+    const x = 30 + rnd() * (W - 60);
+    const y = 40 + rnd() * (H - 80);
+    const r = 10 + rnd() * 16;
+    const d = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, 1, x, y, r);
+    d.addColorStop(0, 'rgba(30,34,40,.75)');
+    d.addColorStop(0.7, 'rgba(60,66,74,.35)');
+    d.addColorStop(1, 'rgba(255,255,255,.15)');
+    ctx.fillStyle = d;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  bigText(ctx, String(Math.ceil(hp)), W / 2, H * 0.5, hp >= 10000 ? 58 : 76);
+  t.tex.needsUpdate = true;
+}
+
+/** The wall of a gatehouse: dark steel plate with a hazard band along the top, tiled across. */
+function gateWallTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, '#7b8592');
+  g.addColorStop(1, '#5a636e');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.fillStyle = 'rgba(0,0,0,.18)';
+  ctx.fillRect(126, 40, 4, 216);
+  ctx.fillStyle = '#4a525c';
+  for (let x = 12; x < 256; x += 40) for (const y of [52, 236]) ctx.fillRect(x, y, 8, 8);
+  hazard(ctx, 0, 0, 256, 36);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  return tex;
+}
+
 // Plain gates are translucent with a white frame. Pump gates (they change when shot) are solid,
 // with a hazard-striped frame and a caption, so the two never look alike.
 function drawGate(t, label, color, locked, pump) {
@@ -312,6 +395,7 @@ export function createRenderer(canvas) {
   const cStone = new THREE.Color(COLORS.stone);
   const cDust = new THREE.Color(0xd9d4ca);
   const cSand = new THREE.Color(0xd8b878);
+  const cSteel = new THREE.Color(0x9aa3ae);
 
   // Elites wear horns (instanced separately: there are only a few).
   const MAX_ELITES = 64;
@@ -435,6 +519,7 @@ export function createRenderer(canvas) {
   function makeVault(v) {
     if (v.pillar) return makePillar(v);
     if (v.sack) return makeSacks(v);
+    if (v.steel) return makeSteel(v);
     const w = v.x1 - v.x0;
     const group = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(w, 2.5, v.depth), vaultBodyMat);
@@ -498,6 +583,125 @@ export function createRenderer(canvas) {
     group.position.set((v.x0 + v.x1) / 2, 0, v.z);
     scene.add(group);
     return { obj: group, kind: 'vault', t, shown: -1, openAt: 0, sack: true, bag };
+  }
+
+  const steelMat = new THREE.MeshLambertMaterial({ color: 0x8d97a3 });
+  function makeSteel(v) {
+    const w = v.x1 - v.x0;
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(w, 2.4, v.depth), steelMat);
+    body.position.y = 1.2;
+    group.add(body);
+    const t = textCanvas(256, 256);
+    const face = new THREE.Mesh(panelGeo(w - 0.04, 2.36), new THREE.MeshLambertMaterial({ map: t.tex }));
+    face.position.set(0, 1.2, -v.depth / 2 - 0.01);
+    face.rotation.y = Math.PI;
+    group.add(face);
+    group.position.set((v.x0 + v.x1) / 2, 0, v.z);
+    scene.add(group);
+    return { obj: group, kind: 'vault', t, shown: -1, openAt: 0, steel: true };
+  }
+
+  // ---------------------------------------------------------------- gatehouses
+  // A steel wall across the road with two openings: the door the horde streams out of, and the
+  // slot its strongbox plugs. When the gatehouse is beaten the wall sinks into the road.
+  const gateWallMat = new THREE.MeshLambertMaterial({ map: gateWallTexture() });
+  const gateWallH = 2.9;
+  function makeGatehouse(gh) {
+    const group = new THREE.Group();
+    const holes = [gh.door, gh.slot].sort((a, b) => a[0] - b[0]);
+    const spans = [];
+    let x = -HALF_W - 0.4;
+    for (const [a, b] of holes) {
+      if (a - x > 0.01) spans.push([x, a]);
+      x = b;
+    }
+    if (HALF_W + 0.4 - x > 0.01) spans.push([x, HALF_W + 0.4]);
+    for (const [a, b] of spans) {
+      const w = b - a;
+      const geo = new THREE.BoxGeometry(w, gateWallH, 0.8);
+      const uv = geo.attributes.uv;
+      for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * (w / 2));
+      const m = new THREE.Mesh(geo, gateWallMat);
+      m.position.set((a + b) / 2, gateWallH / 2, 0);
+      group.add(m);
+    }
+    // lintels over both openings, and the door leaves swung open
+    for (const [a, b] of holes) {
+      const l = new THREE.Mesh(new THREE.BoxGeometry(b - a, 0.5, 0.9), gateWallMat);
+      l.position.set((a + b) / 2, gateWallH - 0.25, 0);
+      group.add(l);
+    }
+    for (const sx of [0, 1]) {
+      const leafW = (gh.door[1] - gh.door[0]) / 2;
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, gateWallH - 0.55, 0.12), steelMat);
+      const hinge = new THREE.Group();
+      hinge.position.set(gh.door[sx], 0, -0.4);
+      leaf.position.set((sx ? -1 : 1) * leafW / 2, (gateWallH - 0.55) / 2, 0);
+      hinge.add(leaf);
+      hinge.rotation.y = (sx ? 1 : -1) * 1.9; // swung outward, toward the squad
+      group.add(hinge);
+    }
+    group.position.set(0, 0, gh.z);
+    scene.add(group);
+    return { obj: group, kind: 'gatehouse', openAt: 0 };
+  }
+
+  // ---------------------------------------------------------------- brutes
+  // A hulking brute: slab torso, small horned head, spiked iron pauldrons and huge fists.
+  const bruteSkin = new THREE.MeshLambertMaterial({ color: 0xc8382b });
+  const bruteDark = new THREE.MeshLambertMaterial({ color: 0x5c1515 });
+  const ironMat = new THREE.MeshLambertMaterial({ color: 0x4b515b });
+  const boneMat = new THREE.MeshLambertMaterial({ color: 0xf3e6c8 });
+  function makeBrute(e) {
+    const k = e.r;
+    const group = new THREE.Group();
+    const rig = new THREE.Group(); // leans and bobs
+    group.add(rig);
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.6 * k, 1.5 * k, 1 * k), new THREE.MeshLambertMaterial({ color: 0xc8382b }));
+    body.position.y = 1.85 * k;
+    rig.add(body);
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(1.5 * k, 0.28 * k, 1.04 * k), ironMat);
+    belt.position.y = 1.15 * k;
+    rig.add(belt);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.42 * k, 16, 12), bruteSkin);
+    head.position.set(0, 2.85 * k, -0.15 * k);
+    rig.add(head);
+    for (const sx of [-1, 1]) {
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.12 * k, 0.55 * k, 8), boneMat);
+      horn.position.set(sx * 0.3 * k, 3.25 * k, -0.15 * k);
+      horn.rotation.z = -sx * 0.45;
+      rig.add(horn);
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.08 * k, 8, 6), new THREE.MeshBasicMaterial({ color: 0xfff6a0 }));
+      eye.position.set(sx * 0.16 * k, 2.92 * k, -0.52 * k);
+      rig.add(eye);
+      const pad = new THREE.Mesh(new THREE.SphereGeometry(0.42 * k, 12, 8), ironMat);
+      pad.scale.set(1, 0.7, 1);
+      pad.position.set(sx * 0.95 * k, 2.5 * k, 0);
+      rig.add(pad);
+      const spike = new THREE.Mesh(new THREE.ConeGeometry(0.1 * k, 0.4 * k, 6), boneMat);
+      spike.position.set(sx * 1.05 * k, 2.88 * k, 0);
+      rig.add(spike);
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.26 * k, 0.22 * k, 1.1 * k, 10), bruteDark);
+      leg.position.set(sx * 0.42 * k, 0.55 * k, 0);
+      group.add(leg);
+    }
+    const fists = [-1, 1].map((sx) => {
+      const arm = new THREE.Group();
+      arm.position.set(sx * 1.05 * k, 2.4 * k, 0);
+      const limb = new THREE.Mesh(new THREE.CylinderGeometry(0.22 * k, 0.2 * k, 1.2 * k, 10), bruteSkin);
+      limb.position.y = -0.6 * k;
+      arm.add(limb);
+      const fist = new THREE.Mesh(new THREE.SphereGeometry(0.38 * k, 12, 10), ironMat);
+      fist.position.y = -1.3 * k;
+      arm.add(fist);
+      rig.add(arm);
+      return arm;
+    });
+    const legs = group.children.filter((c) => c.geometry?.type === 'CylinderGeometry');
+    group.position.set(e.x, 0, e.z);
+    scene.add(group);
+    return { obj: group, kind: 'brute', rig, body, fists, legs, k };
   }
 
   const concreteMat = new THREE.MeshLambertMaterial({ color: 0xbab4a9 });
@@ -629,7 +833,7 @@ export function createRenderer(canvas) {
   }
 
   // Geometries/materials shared by many objects; everything else belongs to one object.
-  const shared = new Set([postGeo, postMat, pumpPostMat, targetGeo, targetMat, vaultBodyMat, concreteMat, sackGeo, sackMat, ropeGeo, ropeMat, wallMat, crateGeo, barrelGeo, barrelMat, bandGeo, bandMat]);
+  const shared = new Set([postGeo, postMat, pumpPostMat, targetGeo, targetMat, vaultBodyMat, concreteMat, sackGeo, sackMat, ropeGeo, ropeMat, steelMat, gateWallMat, bruteSkin, bruteDark, ironMat, boneMat, wallMat, crateGeo, barrelGeo, barrelMat, bandGeo, bandMat]);
   function disposeObj(obj) {
     scene.remove(obj);
     obj.traverse((m) => {
@@ -731,7 +935,9 @@ export function createRenderer(canvas) {
   // ---------------------------------------------------------------- events -> effects
   function onEvent(e) {
     if (e.t === 'kill') {
-      if (stones.length < MAX_STONES) stones.push({ x: e.x, z: e.z, sc: e.elite ? 2 : 1, t0: performance.now(), life: e.elite ? 380 : 260, elite: e.elite });
+      const big = e.elite || e.brute;
+      if (stones.length < MAX_STONES) stones.push({ x: e.x, z: e.z, sc: e.brute ? 3.6 : e.elite ? 2 : 1, t0: performance.now(), life: e.brute ? 600 : big ? 380 : 260, elite: big });
+      if (e.brute) shake = Math.max(shake, 0.5);
       else burst(e.x, 0.4, e.z, 2, cStone, 3, 0.13, 0.45);
       if (e.elite) shake = Math.max(shake, 0.18);
     } else if (e.t === 'clash') {
@@ -741,6 +947,12 @@ export function createRenderer(canvas) {
       const o = objs.get(`g${e.id}`);
       if (o) o.popAt = performance.now();
       burst(e.x, 1.2, e.z, 18, new THREE.Color(e.good ? 0x6cc4ff : 0xff5d6c), 5, 0.12, 0.6, 3);
+    } else if (e.t === 'vaultOpen' && e.steel) {
+      // the strongbox bursts: steel plates, a shower of sparks, then gold
+      for (let y = 0.3; y < 2.4; y += 0.45) burst(e.x, y, e.z, 7, cSteel, 5.5, 0.34, 1.2, 4);
+      burst(e.x, 1.2, e.z, 40, new THREE.Color(0xfff2a8), 9, 0.08, 0.6, 6);
+      burst(e.x, 1.4, e.z, 30, new THREE.Color(0xffd34d), 6, 0.14, 0.8, 7);
+      shake = Math.max(shake, 0.45);
     } else if (e.t === 'vaultOpen' && e.sack) {
       // the sacks split: sand everywhere, burlap scraps, and a flash of gold
       for (let y = 0.3; y < 1.8; y += 0.4) burst(e.x, y, e.z, 14, cSand, 6, 0.16, 1.1, 5);
@@ -785,6 +997,17 @@ export function createRenderer(canvas) {
       }
       burst(0, 0.4, e.z0, 40, new THREE.Color(0xc8c2b6), 9, 0.3, 1.2, 4);
       shake = 1;
+    } else if (e.t === 'smash') {
+      const o = objs.get(`u${e.id}`);
+      if (o) o.smashAt = performance.now();
+      burst(e.x, 0.4, e.z, 16, new THREE.Color(COLORS.soldier), 6, 0.14, 0.7, 5);
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) burst(e.x + Math.cos(a) * 1.4, 0.2, e.z + Math.sin(a) * 1.4, 1, cDust, 3, 0.3, 0.7, 1.5);
+      shake = Math.max(shake, 0.6);
+    } else if (e.t === 'gateOpen') {
+      const o = objs.get(`h${e.id}`);
+      if (o) o.openAt = performance.now();
+      for (let x = -HALF_W; x <= HALF_W; x += 0.8) burst(x, 0.5, e.z, 3, cDust, 4, 0.45, 1.2, 3);
+      shake = Math.max(shake, 0.8);
     } else if (e.t === 'pump') {
       const o = objs.get(`g${e.id}`);
       if (o) o.pumpAt = performance.now();
@@ -861,7 +1084,7 @@ export function createRenderer(canvas) {
     const zMax = s.z + VIEW_AHEAD;
     let nh = 0;
     const putEnemy = (e) => {
-      if (k >= MAX_ENEMIES || e.z < zMin || e.z > zMax || e.hp <= 0) return;
+      if (k >= MAX_ENEMIES || e.z < zMin || e.z > zMax || e.hp <= 0 || e.kind === 'brute') return;
       const wob = Math.sin(time * 9 + e.id) * 0.06;
       const elite = e.kind === 'elite';
       const sc = elite ? 2 : 1;
@@ -993,6 +1216,7 @@ export function createRenderer(canvas) {
       const hp = Math.ceil(v.hp);
       if (hp !== o.shown && (now - (o.drawnAt || 0) > 60 || hp === 0)) {
         if (o.sack) drawSackTag(o.t, v.hp);
+        else if (o.steel) drawSteel(o.t, v.hp, v.maxHp, v.id);
         else drawConcrete(o.t, v.hp, v.maxHp, v.id);
         o.shown = hp;
         o.drawnAt = now;
@@ -1009,6 +1233,42 @@ export function createRenderer(canvas) {
         // rattle while being hit
         const hit = o.drawnAt && now - o.drawnAt < 80;
         o.obj.position.x = (v.x0 + v.x1) / 2 + (hit ? (Math.random() - 0.5) * 0.06 : 0);
+      }
+    }
+    const brute = (e) => {
+      if (e.kind !== 'brute' || e.hp <= 0 || !inView(e.z)) return;
+      const key = `u${e.id}`;
+      let o = objs.get(key);
+      if (!o) objs.set(key, (o = makeBrute(e)));
+      seen.add(key);
+      o.obj.position.set(e.x, 0, e.z);
+      const moving = !e.held && !(e.stunUntil > g.t) && !(e.waitFor && e.z > s.z + 30);
+      const ph = time * 5 + e.id;
+      o.legs.forEach((l, i) => (l.position.z = moving ? Math.sin(ph + i * Math.PI) * 0.25 * o.k : 0));
+      const stagger = e.stunUntil > g.t ? (e.stunUntil - g.t) / 0.7 : 0;
+      o.rig.rotation.x = -0.35 * stagger; // knocked back: leaning away
+      o.rig.position.y = moving ? Math.abs(Math.sin(ph)) * 0.12 : 0;
+      // swing arms while walking; slam both fists down on a smash
+      const sm = o.smashAt ? (now - o.smashAt) / 300 : 1;
+      o.fists.forEach((a, i) => {
+        a.rotation.x = sm < 1 ? -2.4 * (1 - sm) : moving ? Math.sin(ph + i * Math.PI) * 0.5 : 0;
+      });
+      o.body.material.emissive.setHex(g.t - e.hitAt < 0.07 ? 0x553333 : 0x000000);
+    };
+    for (const e of g.enemies) brute(e);
+    for (let i = g.dormant.length - 1; i >= 0 && g.dormant[i].z < zMax; i--) brute(g.dormant[i]);
+    for (const gh of g.gatehouses) {
+      if (!inView(gh.z)) continue;
+      const key = `h${gh.id}`;
+      let o = objs.get(key);
+      if (!o) objs.set(key, (o = makeGatehouse(gh)));
+      seen.add(key);
+      if (gh.open) {
+        // the wall sinks into the road
+        const p = o.openAt ? Math.min(1, (now - o.openAt) / 900) : 1;
+        o.obj.position.y = -gateWallH * p * p;
+        o.obj.position.x = p < 1 ? (Math.random() - 0.5) * 0.08 : 0;
+        o.obj.visible = p < 1;
       }
     }
     for (const w of g.walls) {

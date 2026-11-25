@@ -97,6 +97,10 @@ export const sound = {
     const f = 523 * 2 ** ((Math.floor(i / 7) * 12 + steps[i % 7]) / 12);
     tone({ freq: f, to: f * 1.5, dur: 0.08, type: 'square', vol: 0.09 });
   },
+  smash() {
+    noise({ dur: 0.4, vol: 0.5, freq: 300 });
+    tone({ freq: 80, to: 40, dur: 0.35, type: 'sine', vol: 0.45 });
+  },
   rip() {
     noise({ dur: 0.35, vol: 0.4, freq: 2500, type: 'bandpass', q: 0.7 });
     noise({ dur: 0.6, vol: 0.25, freq: 500, delay: 0.08 });

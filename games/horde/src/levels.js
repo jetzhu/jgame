@@ -1,7 +1,7 @@
 // Level generation. Each level is a run of segments (gate choices, hordes, the vault gauntlet,
 // crates, pump gates) sized from the squad the player is expected to have at that point (gen.E),
 // so numbers stay exciting whether the squad is 8 or 800. Endless mode appends segments lazily.
-import { LANES, LANE_W, HALF_W, TIDE_SPEED, addEnemy, squadRadius, newId, applyGate, clamp } from './sim.js';
+import { LANES, LANE_W, HALF_W, TIDE_SPEED, GATE_HOLD, addEnemy, squadRadius, newId, applyGate, clamp } from './sim.js';
 
 const SPACING = 0.62;
 
@@ -50,6 +50,13 @@ const soak = (gen, base) =>
   gen.E * gen.perSoldier * base * 2.2 * early(gen.d) * (1 + Math.min(gen.d, 40) * 0.03) * (gen.ramp || 1);
 const lose = (gen, frac) => (gen.E = Math.max(3, gen.E * (1 - frac)));
 
+/** A brute sized for a squad of about E: a few seconds of its full fire, and he hits hard. */
+function addBrute(g, x, z, E) {
+  const { perSoldier, d } = g.gen;
+  const hp = Math.ceil(E * perSoldier * (2.5 + Math.min(d, 30) * 0.04) * (g.gen.ramp || 1));
+  return addEnemy(g, x, z, 'brute', hp, Math.ceil(4 + E * 0.12));
+}
+
 function gate(g, x0, x1, z, op, value, extra = {}) {
   const gt = { id: newId(g), x0, x1, z, op, value, used: false, ...extra };
   g.gates.push(gt);
@@ -93,6 +100,10 @@ const SEGMENTS = {
     else if (r < 0.8) [x0, x1] = rand() < 0.5 ? [-HALF_W, 1.5] : [-1.5, HALF_W];
     else [x0, x1] = [-HALF_W, HALF_W];
     const depth = placeHorde(g, soak(g.gen, 2.2), x0, x1, z0 + 14);
+    if (d >= 10 && rand() < 0.3) {
+      addBrute(g, (x0 + x1) / 2, z0 + 10.5, g.gen.E);
+      lose(g.gen, 0.06);
+    }
     lose(g.gen, 0.12);
     return depth + 22;
   },
@@ -109,7 +120,10 @@ const SEGMENTS = {
     let n = 0;
     for (let z = z0 + 6; z < z0 + L; z += 2.2, n++) gate(g, sx0, sx1, z, '+', small, { row: true });
     const [vx0, vx1] = laneRange(vaultLane);
-    const vault = { id: newId(g), x0: vx0 + 0.1, x1: vx1 - 0.1, z: z0 + 6, depth: 1.4, hp: 0, maxHp: 0, sack: rand() < 0.4 };
+    const vault = { id: newId(g), x0: vx0 + 0.1, x1: vx1 - 0.1, z: z0 + 6, depth: 1.4, hp: 0, maxHp: 0 };
+    const look = rand();
+    if (look < 0.35) vault.sack = true;
+    else if (look < 0.65) vault.steel = true;
     vault.hp = vault.maxHp = Math.ceil(E * g.gen.perSoldier * (2.6 + rand() * 1.6));
     g.vaults.push(vault);
     const gold = nice(E * 0.1 + 2);
@@ -270,7 +284,11 @@ SEGMENTS.tide = function (g, z0) {
       const e = addEnemy(g, tx0 + pad + c * sp + (rand() - 0.5) * 0.08, front + r * gap + (rand() - 0.5) * 0.08, 'grunt', hp);
       e.speed = speed;
       e.pack = td.id;
+      e.walled = true;
     }
+  // a brute waits at the back and wades in once the tide is worn down
+  const br = addBrute(g, (tx0 + tx1) / 2, front + depth + 0.5, Eavg);
+  br.waitFor = td.id;
   // the sacks and the gold lane behind them
   const gx = [wallX, sgn * HALF_W].sort((a, b) => a - b);
   const sackHp = Math.ceil(Eavg * g.gen.perSoldier * (1.1 + rand() * 0.4));
@@ -286,6 +304,63 @@ SEGMENTS.tide = function (g, z0) {
   return 20 + depth + 10;
 };
 
+// The gatehouse: a steel wall across the road, with the horde queued behind it. They come out of
+// the door in a steady stream (a brute last); the squad holds in front of the wall until he is down
+// and the wall drops. A ladder of + plates runs along one rail; on the other, a steel strongbox
+// plugs a slot into a walled gold lane: shoot it out and you can slip through early.
+const GATE_FRAC = 0.35; // share of the squad's fire it takes to keep up with the stream
+SEGMENTS.gatehouse = function (g, z0) {
+  const { rand, E, d } = g.gen;
+  const sgn = rand() < 0.5 ? 1 : -1; // the strongbox's side
+  const rail = -sgn * HALF_W;
+  const wz = z0 + 30;
+  const v = Math.max(1, nice(E / 30));
+  const lx = [rail, rail + sgn * 1.5].sort((a, b) => a - b);
+  let n = 0;
+  for (let z = z0 + 2; z < wz - GATE_HOLD - 0.5; z += 1.5, n++) gate(g, lx[0], lx[1], z, '+', v, { ladder: true });
+  const E0 = E + n * v * 0.8;
+  const ps = g.gen.perSoldier;
+  const slot = [sgn * (HALF_W - 2), sgn * HALF_W].sort((a, b) => a - b);
+  const dc = -sgn * 0.4;
+  const door = [dc - 1.1, dc + 1.1];
+  // the queue behind the door
+  const budget = soak({ ...g.gen, E: E0 }, 2.0);
+  const unit = hpUnit(d);
+  const count = clamp(Math.round(budget / unit), 30, 240);
+  const hp = Math.max(unit, budget / count);
+  const sp = SPACING * 0.85;
+  const cols = Math.floor((door[1] - door[0] - 0.2) / sp) + 1;
+  const pad = (door[1] - door[0] - (cols - 1) * sp) / 2;
+  const gh = { id: newId(g), z: wz, door, slot, box: 0, queue: [], cols, sp, pad, acc: 0, woke: false, open: false, held: false };
+  // the stream starts as the squad walks up the ladder: size it for the squad halfway up
+  gh.rate = clamp((GATE_FRAC * (E + n * v * 0.4) * ps) / hp, 1.5, 10);
+  const pack = newId(g);
+  const queue = (e) => {
+    e.held = gh.id;
+    e.from = gh.id;
+    e.pack = pack;
+    e.walled = true;
+    gh.queue.push(e);
+  };
+  for (let i = 0; i < count; i++)
+    queue(addEnemy(g, door[0] + pad + (i % cols) * sp, wz + 0.7 + Math.floor(i / cols) * sp, 'grunt', hp));
+  const depth = Math.ceil(count / cols) * sp + 2;
+  queue(addBrute(g, dc, wz + depth, E0));
+  // the strongbox and the gold lane behind it
+  const boxHp = Math.ceil(E0 * ps * (1.4 + rand() * 0.4));
+  const box = { id: newId(g), x0: slot[0] + 0.1, x1: slot[1] - 0.1, z: wz, depth: 1.4, hp: boxHp, maxHp: boxHp, steel: true };
+  gh.box = box.id;
+  g.vaults.push(box);
+  g.walls.push({ x: sgn * (HALF_W - 2), z0: wz - 0.7, z1: wz + depth + 2 });
+  const gold = nice(E0 * 0.3 + 3);
+  let m = 0;
+  for (let z = wz + 3; z < wz + depth; z += 5, m++) gate(g, slot[0], slot[1], z, '+', gold, { lockedBy: box.id, gold: true });
+  g.gatehouses.push(gh);
+  g.gen.E = E0 + m * gold * 0.15; // most players hold the door rather than take the slot
+  lose(g.gen, 0.12);
+  return 30 + depth + 8;
+};
+
 const WEIGHTS = [
   ['horde', 3, 1],
   ['choice', 2, 1],
@@ -295,11 +370,13 @@ const WEIGHTS = [
   ['collapse', 1.3, 3],
   ['ladder', 1, 1],
   ['tide', 0.7, 4],
+  ['gatehouse', 0.7, 7],
 ];
+const SET_PIECES = ['tide', 'gatehouse']; // long: at most one of each per level
 
 function pickSegment(rand, d, last, used = []) {
   // the tide is a long set piece: at most one per level
-  const opts = WEIGHTS.filter(([name, , min]) => d >= min && name !== last && !(name === 'tide' && used.includes('tide')));
+  const opts = WEIGHTS.filter(([name, , min]) => d >= min && name !== last && !(SET_PIECES.includes(name) && used.includes(name)));
   let total = opts.reduce((s, o) => s + o[1], 0);
   let r = rand() * total;
   for (const [name, w] of opts) if ((r -= w) <= 0) return name;
@@ -335,6 +412,8 @@ function addBoss(g, z) {
 export const isBossLevel = (level) => level % 5 === 0;
 /** Every third non-boss level opens with the tide, and the squad starts nearly from one. */
 export const isTideLevel = (level) => level % 3 === 0 && !isBossLevel(level);
+/** Every fourth level (that isn't a boss or tide level) opens with a gatehouse. */
+export const isGateLevel = (level) => level % 4 === 0 && !isBossLevel(level) && !isTideLevel(level);
 
 /** Campaign level: lay out every segment now. Returns the finish z. */
 export function buildLevel(g) {
@@ -345,7 +424,7 @@ export function buildLevel(g) {
       ? ['choice', 'horde', 'collapse']
       : d === 2
         ? ['choice', 'gauntlet', 'collapse']
-        : [isTideLevel(d) ? 'tide' : 'choice', ...Array.from({ length: 2 + Math.min(8, Math.floor(d * 0.5)) }, () => null)];
+        : [isTideLevel(d) ? 'tide' : isGateLevel(d) ? 'gatehouse' : 'choice', ...Array.from({ length: 2 + Math.min(8, Math.floor(d * 0.5)) }, () => null)];
   if (isTideLevel(d)) {
     // upgrades still count: 1 soldier plus one per squad upgrade
     const s = g.squad;
@@ -385,10 +464,10 @@ export function endlessSegment(g, z0) {
     addBoss(g, z0 + 20);
     return 30;
   }
-  // a tide at most every eighth segment
-  const recent = gen.n - (gen.tideAt ?? -99) < 8 ? ['tide'] : [];
-  const name = gen.n === 1 ? 'choice' : pickSegment(gen.rand, Math.min(gen.d, 4), gen.last, recent);
-  if (name === 'tide') gen.tideAt = gen.n;
+  // a set piece at most every eighth segment
+  const recent = gen.n - (gen.setAt ?? -99) < 8 ? SET_PIECES : [];
+  const name = gen.n === 1 ? 'choice' : pickSegment(gen.rand, Math.min(gen.d, 7), gen.last, recent);
+  if (SET_PIECES.includes(name)) gen.setAt = gen.n;
   gen.last = name;
   return SEGMENTS[name](g, z0, gen.n === 1);
 }

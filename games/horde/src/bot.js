@@ -1,5 +1,5 @@
 // A simple, decent player. Used by the balance tests and by the demo behind the title screen.
-import { LANES, LANE_W, HALF_W, RANGE, applyGate, dps, clamp } from './sim.js';
+import { LANES, LANE_W, HALF_W, RANGE, GATE_HOLD, applyGate, dps, clamp } from './sim.js';
 
 const laneOf = (x) => (x < -LANE_W / 2 ? 0 : x > LANE_W / 2 ? 2 : 1);
 
@@ -57,6 +57,24 @@ export function botInput(g, skill = 1) {
     if (td.front - s.z < 12) return { tx: -td.goldSide * (HALF_W - Math.max(0.75, s.r * 0.8)) };
   }
 
+  // a brute closing in comes first
+  for (const e of g.enemies) if (e.kind === 'brute' && e.hp > 0 && !e.held && ahead(e.z + 1, 14 + 6 * skill)) return { tx: e.x };
+
+  // a gatehouse: hold the stream at the door; break the strongbox when it's quick; then take the slot
+  for (const gh of g.gatehouses) {
+    if (gh.open || !gh.woke || s.z > gh.z) continue;
+    const slotX = (gh.slot[0] + gh.slot[1]) / 2;
+    const box = g.vaults.find((v) => v.id === gh.box && v.hp > 0);
+    const near = g.enemies.some((e) => !e.held && e.hp > 0 && e.z > s.z - 1 && e.z - s.z < 8);
+    if (!box) {
+      // through the slot in a lull (or already on the way)
+      if (skill > 0.5 && (!near || s.x > gh.slot[0] - 0.5 && s.x < gh.slot[1] + 0.5 && s.z > gh.z - GATE_HOLD + 1)) return { tx: slotX };
+      continue;
+    }
+    // at the wall (the ladder is behind us by then), spend fire on the strongbox in a lull
+    if (skill > 0.5 && !near && s.z > gh.z - GATE_HOLD - 1 && box.hp < dps(g) * (1 + 4 * skill)) return { tx: slotX };
+  }
+
   const plan = gatePlan(g);
   if (plan.soon && plan.best && plan.best.score > s.count - 0.25) return { tx: plan.best.x };
 
@@ -94,7 +112,7 @@ export function botInput(g, skill = 1) {
   // 2. a vault whose gold lane is worth it and can be cracked in time
   if (skill > 0.5)
     for (const v of g.vaults) {
-      if (v.hp <= 0 || !ahead(v.z, RANGE)) continue;
+      if (v.hp <= 0 || !ahead(v.z, RANGE) || g.gatehouses.some((gh) => gh.box === v.id)) continue;
       const t = (v.z - s.z - 1) / speed;
       if (v.hp < dps(g) * t * 0.9) return { tx: (v.x0 + v.x1) / 2 };
     }

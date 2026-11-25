@@ -93,3 +93,12 @@ test('tide levels start from one soldier (plus squad upgrades) and open with the
   for (let level = 1; level <= 40; level++)
     assert.ok(createGame({ level }).segs.filter((s) => s.name === 'tide').length <= 1, `level ${level}: one tide at most`);
 });
+
+test('gatehouse levels open with a gatehouse; tides and gatehouses come with a brute', () => {
+  assert.equal(createGame({ level: 8 }).segs[0].name, 'gatehouse');
+  assert.notEqual(createGame({ level: 12 }).segs[0].name, 'gatehouse', 'tide levels keep the tide');
+  for (const level of [6, 8]) {
+    const g = createGame({ level });
+    assert.equal(g.dormant.filter((e) => e.kind === 'brute' && e.z < g.segs[0].z1 + 5).length, 1, `level ${level}`);
+  }
+});

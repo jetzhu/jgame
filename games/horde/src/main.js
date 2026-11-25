@@ -1,7 +1,7 @@
 // Horde Gate: screens, input, game loop, HUD and saving. Game rules live in sim.js,
 // drawing in render.js.
 import { createGame, step, DT, HALF_W, TIDE_GAP, progress } from './sim.js';
-import { isBossLevel, isTideLevel } from './levels.js';
+import { isBossLevel, isTideLevel, isGateLevel } from './levels.js';
 import { botInput } from './bot.js';
 import { createRenderer } from './render.js';
 import { sound } from './audio.js';
@@ -74,18 +74,33 @@ function startRun(mode) {
   renderer.reset();
   sound.unlock();
   show('play');
-  $('hint').textContent = matchMedia('(pointer: coarse)').matches ? 'Drag to steer' : 'Drag or use ← → to steer · hold ↑ to run faster';
+  const touch = matchMedia('(pointer: coarse)').matches;
+  $('hint').textContent = touch ? 'Drag to steer' : 'Drag or use ← → to steer · hold ↑ to run faster';
   $('hint').hidden = false;
+  // first run ever: a hand (or the arrow keys) shows how to steer until the player does
+  S.tutorial = mode === 'campaign' && save.plays === 0;
+  $('tutorial').hidden = !S.tutorial;
+  $('tutorial').className = touch ? 'touch' : 'keys';
+  if (S.tutorial) $('hint').hidden = true; // the hand says it better
   S.hintUntil = performance.now() + 3500;
   if (mode === 'endless') banner('ENDLESS', 'gold');
   else if (isBossLevel(save.level)) banner(`LEVEL ${save.level} · BOSS`, 'red');
   else if (isTideLevel(save.level)) banner(`LEVEL ${save.level} · TIDE`, 'red');
+  else if (isGateLevel(save.level)) banner(`LEVEL ${save.level} · GATEHOUSE`, 'red');
   else banner(`LEVEL ${save.level}`);
 }
 
 // ------------------------------------------------------------------ screens
+function endTutorial() {
+  if (!S.tutorial) return;
+  S.tutorial = false;
+  $('tutorial').hidden = true;
+}
+
 function show(screen) {
   S.screen = screen;
+  if (screen !== 'play' && screen !== 'pause') $('tutorial').hidden = true;
+  else if (S.tutorial) $('tutorial').hidden = false;
   for (const id of ['home', 'shop', 'result', 'pause']) $(id).hidden = id !== screen;
   const playing = screen === 'play' || screen === 'pause' || (screen === 'result' && !S.demo);
   $('hud').hidden = !playing;
@@ -223,7 +238,8 @@ function handleEvents(g) {
     if (!live) continue;
     switch (e.t) {
       case 'kill':
-        if (!e.quiet) sound.kill();
+        if (e.brute) sound.boom();
+        else if (!e.quiet) sound.kill();
         break;
       case 'clash':
         sound.clash();
@@ -268,6 +284,19 @@ function handleEvents(g) {
         break;
       case 'pump':
         sound.tick();
+        break;
+      case 'smash':
+        sound.smash();
+        floatAt(`-${e.n}`, e.x, 2.2, e.z, 'bad');
+        navigator.vibrate?.(90);
+        break;
+      case 'gateHold':
+        banner('HOLD THE DOOR!', 'red');
+        break;
+      case 'gateOpen':
+        sound.boom();
+        banner('GATE DOWN!', 'gold');
+        navigator.vibrate?.([80, 40, 80]);
         break;
       case 'tideHold':
         banner('HOLD THE TIDE!', 'red');
@@ -367,8 +396,9 @@ const eliteBars = [];
 function updateEliteBars(g) {
   const s = g.squad;
   const list = [];
-  for (const e of g.enemies) if (e.kind === 'elite' && e.hp > 0 && e.z > s.z - 1 && e.z - s.z < 45) list.push(e);
-  for (let i = g.dormant.length - 1; i >= 0 && g.dormant[i].z - s.z < 45; i--) if (g.dormant[i].kind === 'elite') list.push(g.dormant[i]);
+  const barred = (e) => e.kind === 'elite' || e.kind === 'brute';
+  for (const e of g.enemies) if (barred(e) && e.hp > 0 && e.z > s.z - 1 && e.z - s.z < 45) list.push(e);
+  for (let i = g.dormant.length - 1; i >= 0 && g.dormant[i].z - s.z < 45; i--) if (barred(g.dormant[i])) list.push(g.dormant[i]);
   list.sort((a, b) => a.z - b.z);
   const n = Math.min(list.length, 6);
   while (eliteBars.length < n) {
@@ -380,9 +410,10 @@ function updateEliteBars(g) {
   }
   eliteBars.forEach((el, i) => {
     const e = list[i];
-    const p = e && renderer.project(e.x, 1.55, e.z);
+    const p = e && renderer.project(e.x, e.kind === 'brute' ? 3.9 : 1.55, e.z);
     el.hidden = !e || !p.on || S.demo;
     if (el.hidden) return;
+    el.classList.toggle('boss', e.kind === 'brute');
     el.style.left = `${p.x}px`;
     el.style.top = `${p.y}px`;
     el.firstChild.textContent = Math.ceil(e.hp);
@@ -407,6 +438,7 @@ function pointerMove(e) {
   if (!input.dragging) return;
   const w = Math.min(window.innerWidth, 700);
   input.tx = Math.max(-HALF_W, Math.min(HALF_W, input.startTx + SCREEN_RIGHT * ((e.clientX - input.startX) / w) * 2 * HALF_W * 1.3));
+  if (Math.abs(e.clientX - input.startX) > 12) endTutorial();
   if (S.hintUntil) S.hintUntil = performance.now() + 300;
 }
 function pointerUp() {
@@ -436,6 +468,7 @@ function keyboardInput(dt) {
   for (const k of held) dir += KEYS[k] || 0;
   if (!dir) return;
   input.tx = Math.max(-HALF_W, Math.min(HALF_W, (input.tx ?? S.game.squad.tx) + SCREEN_RIGHT * Math.sign(dir) * 11 * dt));
+  endTutorial();
   if (S.hintUntil) S.hintUntil = performance.now() + 300;
 }
 

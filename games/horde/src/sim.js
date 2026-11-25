@@ -20,6 +20,7 @@ const MAX_VISIBLE_BULLETS = 30;
 const ENEMY_R = 0.3;
 export const HOLD = 10; // how far in front of a raised slab the squad stops
 export const TIDE_SPEED = 0.8; // a tide creeps instead of charging
+export const GATE_HOLD = 6; // the squad stops this far short of a gatehouse wall
 export const TIDE_GAP = 3.5; // the squad stops this far short of a tide's front row
 
 /** Small seeded PRNG (mulberry32). */
@@ -75,6 +76,7 @@ export function createGame(opts = {}) {
     vaults: [], // also the pillars holding up slabs ({ pillar: true, slab: id })
     slabs: [], // raised gate fields: { id, z0, z1, tiltSide, pillar, down, fellAt }
     tides: [], // packed hordes you can't walk past: { id, wallX, goldSide, z1, front, held, cleared }
+    gatehouses: [], // steel walls across the road: { id, z, door, slot, box, queue, rate, open, ... }
     walls: [],
     crates: [],
     barrels: [],
@@ -110,9 +112,14 @@ function sortDormant(g) {
   g.dormant.sort((a, b) => b.z - a.z); // farthest first; pop() takes the nearest
 }
 
-/** kind: 'grunt' (the horde) or 'elite' (big, tough, walks out ahead of its horde, has an HP bar). */
-export function addEnemy(g, x, z, kind, hp) {
+/**
+ * kind: 'grunt' (the horde), 'elite' (big, tough, walks out ahead of its horde, has an HP bar) or
+ * 'brute' (a mini-boss: slow, huge HP; reaching the squad flattens `power` soldiers, then he is
+ * knocked back and comes again until shot down).
+ */
+export function addEnemy(g, x, z, kind, hp, power) {
   const elite = kind === 'elite';
+  const brute = kind === 'brute';
   const e = {
     id: newId(g),
     x,
@@ -120,9 +127,10 @@ export function addEnemy(g, x, z, kind, hp) {
     hp,
     maxHp: hp,
     kind,
-    r: elite ? 0.6 : ENEMY_R,
-    power: elite ? 6 : 1,
-    speed: elite ? 1.9 : 2.4,
+    r: brute ? 1 : elite ? 0.6 : ENEMY_R,
+    power: power ?? (brute ? 12 : elite ? 6 : 1),
+    speed: brute ? 1.3 : elite ? 1.9 : 2.4,
+    walled: brute, // walls stop him (a walled lane is safe from him)
     hitAt: -1, // sim time of the last non-lethal hit (the renderer flashes it)
   };
   g.dormant.push(e);
@@ -193,6 +201,7 @@ export function step(g, input) {
   }
 
   holdTides(g, prevZ);
+  holdGatehouses(g, prevZ);
 
   // walls (lane rails): the squad's center can't cross them
   for (const w of g.walls) {
@@ -253,6 +262,7 @@ export function step(g, input) {
 
   fire(g);
   moveBullets(g);
+  runGatehouses(g);
   moveEnemies(g);
   moveBoss(g);
 
@@ -265,6 +275,7 @@ export function step(g, input) {
   g.walls = g.walls.filter((x) => x.z1 > s.z - 15);
   g.slabs = g.slabs.filter((x) => x.z1 > s.z - 15);
   g.tides = g.tides.filter((x) => x.z1 > s.z - 15);
+  g.gatehouses = g.gatehouses.filter((x) => x.z > s.z - 60);
   g.vaults = g.vaults.filter((x) => x.z > s.z - 15 || g.gates.some((gt) => gt.lockedBy === x.id));
 
   if (s.count <= 0) {
@@ -385,6 +396,10 @@ function firstHit(g, grid, b, from, to) {
     if (!br.dead && Math.abs(br.x - b.x) < 0.5) consider(br.z - 0.4, { kind: 'barrel', obj: br, z: br.z - 0.4 });
   for (const gt of g.gates)
     if (gt.pump && !gt.used && b.x > gt.x0 && b.x < gt.x1) consider(gt.z, { kind: 'pump', obj: gt, z: gt.z, absorb: true });
+  // a gatehouse wall stops bullets except at its door and its strongbox slot
+  for (const gh of g.gatehouses)
+    if (!gh.open && !(b.x > gh.door[0] && b.x < gh.door[1]) && !(b.x > gh.slot[0] && b.x < gh.slot[1]))
+      consider(gh.z - 0.3, { kind: 'wall', obj: gh, z: gh.z - 0.3, absorb: true });
   const boss = g.boss;
   if (boss && !boss.dead && Math.abs(boss.x - b.x) < boss.r) consider(boss.z - boss.r, { kind: 'boss', obj: boss, z: boss.z - boss.r, absorb: true });
   return best;
@@ -403,18 +418,19 @@ function damage(g, hit, b) {
     o.hp = 0;
     if (hit.kind === 'enemy') {
       g.stats.kills++;
-      g.events.push({ t: 'kill', x: o.x, z: o.z, elite: o.kind === 'elite' });
+      g.events.push({ t: 'kill', x: o.x, z: o.z, elite: o.kind === 'elite', brute: o.kind === 'brute' });
     } else if (hit.kind === 'crate') {
       o.dead = true;
       openCrate(g, o);
     } else explodeBarrel(g, o);
     return;
   }
+  if (hit.kind === 'wall') return;
   if (hit.kind === 'vault') {
     o.hp = Math.max(0, o.hp - b.dmg);
     g.events.push({ t: 'vaultHit', id: o.id, x: b.x, z: hit.z });
     if (o.hp <= 0) {
-      g.events.push({ t: 'vaultOpen', id: o.id, x: (o.x0 + o.x1) / 2, z: o.z, pillar: !!o.pillar, sack: !!o.sack });
+      g.events.push({ t: 'vaultOpen', id: o.id, x: (o.x0 + o.x1) / 2, z: o.z, pillar: !!o.pillar, sack: !!o.sack, steel: !!o.steel });
       if (o.slab) collapse(g, g.slabs.find((sl) => sl.id === o.slab));
     }
   } else if (hit.kind === 'pump') {
@@ -476,6 +492,8 @@ function holdTides(g, prevZ) {
         if (e.z > s.z - 0.2 && e.z < front && Math.abs(e.x - s.x) < s.r * 0.8 + e.r) front = e.z;
       }
     td.front = front;
+    td.alive = alive;
+    td.total = Math.max(td.total || 0, alive);
     if (!alive && td.woke) {
       td.cleared = true;
       g.events.push({ t: 'tideClear', id: td.id });
@@ -492,6 +510,75 @@ function holdTides(g, prevZ) {
         td.held = true;
         g.events.push({ t: 'tideHold', id: td.id });
       }
+    }
+  }
+}
+
+// The gatehouse: a steel wall across the road. The squad holds GATE_HOLD in front of it while the
+// horde queued behind it comes out through the door at a steady rate, its brute last; once he is
+// down the wall drops. The other way through is the strongbox slot: shoot the steel box out of it
+// and walk into the walled gold lane behind (everything still queued then charges).
+function holdGatehouses(g, prevZ) {
+  const s = g.squad;
+  for (const gh of g.gatehouses) {
+    if (gh.open) continue;
+    const box = g.vaults.find((v) => v.id === gh.box);
+    const boxDown = !box || box.hp <= 0;
+    const limit = gh.z - GATE_HOLD;
+    if (boxDown && s.x > gh.slot[0] && s.x < gh.slot[1]) {
+      if (s.z > limit) s.x = clamp(s.x, gh.slot[0] + 0.02, gh.slot[1] - 0.02); // through the slot: stay in it
+      continue;
+    }
+    if (s.z > limit && prevZ <= limit + 1e-9) {
+      s.z = Math.max(prevZ, limit);
+      s.speed = 0;
+      if (!gh.held) {
+        gh.held = true;
+        g.events.push({ t: 'gateHold', id: gh.id });
+      }
+    }
+  }
+}
+
+function runGatehouses(g) {
+  const s = g.squad;
+  for (const gh of g.gatehouses) {
+    if (gh.open) continue;
+    if (!gh.woke) {
+      if (gh.z - s.z > GATE_HOLD + 16) continue;
+      gh.woke = true;
+    }
+    gh.queue = gh.queue.filter((e) => e.hp > 0);
+    const release = (e) => {
+      e.held = 0;
+      e.pack = 0;
+      e.z = Math.min(e.z, gh.z + 0.7);
+      if (!g.enemies.includes(e)) {
+        g.dormant = g.dormant.filter((x) => x !== e);
+        g.enemies.push(e);
+      }
+    };
+    if (s.z > gh.z + 0.5) {
+      // came through the slot: whatever is still queued charges out
+      for (const e of gh.queue) release(e);
+      gh.queue.length = 0;
+    }
+    gh.acc += gh.rate * DT;
+    while (gh.acc >= 1 && gh.queue.length) {
+      gh.acc -= 1;
+      release(gh.queue.shift());
+    }
+    // the rest shuffle up to the door
+    gh.queue.forEach((e, i) => {
+      const tz = gh.z + 0.7 + Math.floor(i / gh.cols) * gh.sp;
+      const tx = gh.door[0] + gh.pad + (i % gh.cols) * gh.sp;
+      e.z += clamp(tz - e.z, -2.4 * DT, 2.4 * DT);
+      e.x += clamp(tx - e.x, -1.5 * DT, 1.5 * DT);
+    });
+    const bruteUp = (e) => e.from === gh.id && e.kind === 'brute' && e.hp > 0;
+    if (!gh.queue.length && !g.enemies.some(bruteUp) && !g.dormant.some(bruteUp)) {
+      gh.open = true;
+      g.events.push({ t: 'gateOpen', id: gh.id, z: gh.z });
     }
   }
 }
@@ -517,7 +604,7 @@ function explodeBarrel(g, b) {
       if (e.hp <= 0) {
         kills++;
         g.stats.kills++;
-        g.events.push({ t: 'kill', x: e.x, z: e.z, elite: e.kind === 'elite', quiet: true });
+        g.events.push({ t: 'kill', x: e.x, z: e.z, elite: e.kind === 'elite', brute: e.kind === 'brute', quiet: true });
       }
     }
   }
@@ -528,7 +615,9 @@ function explodeBarrel(g, b) {
 function moveEnemies(g) {
   const s = g.squad;
   for (const e of g.enemies) {
-    if (e.hp <= 0) continue;
+    if (e.hp <= 0 || e.held) continue;
+    if (e.waitFor && waiting(g, e)) continue;
+    if (e.stunUntil > g.t) continue;
     e.z -= e.speed * DT;
     const dz = e.z - s.z;
     // a tide only peels off right in front of the squad, slowly, and stays behind the gold lane's
@@ -536,21 +625,35 @@ function moveEnemies(g) {
     if (e.pack ? dz < 4 && Math.abs(s.x - e.x) < s.r + 0.6 : dz < 9) {
       const px = e.x;
       const dx = s.x - e.x;
-      const lat = e.pack ? 1.1 : 1.6;
+      const lat = e.pack || e.kind === 'brute' ? 1.1 : 1.6;
       e.x += clamp(dx, -lat * DT, lat * DT);
-      if (e.pack)
+      if (e.walled)
         for (const w of g.walls)
           if (e.z > w.z0 && e.z < w.z1 && (px - w.x) * (e.x - w.x) <= 0) e.x = px < w.x ? w.x - e.r : w.x + e.r;
     }
     // contact: each enemy that reaches the squad takes soldiers with it
-    if (Math.abs(dz) < s.r * 0.7 + e.r && Math.abs(s.x - e.x) < s.r + e.r && !(e.pack && acrossWall(g, e, s))) {
+    if (Math.abs(dz) < s.r * 0.7 + e.r && Math.abs(s.x - e.x) < s.r + e.r && !(e.walled && acrossWall(g, e, s))) {
       const loss = Math.min(s.count, e.power);
       s.count -= loss;
-      e.hp = 0;
-      g.events.push({ t: 'clash', x: e.x, z: e.z, n: loss });
+      if (e.kind === 'brute') {
+        // a brute smashes into the squad, staggers back and comes again
+        e.z = s.z + s.r * 0.7 + e.r + 2.5;
+        e.stunUntil = g.t + 0.7;
+        g.events.push({ t: 'smash', id: e.id, x: e.x, z: s.z + s.r * 0.5, n: loss });
+      } else {
+        e.hp = 0;
+        g.events.push({ t: 'clash', x: e.x, z: e.z, n: loss });
+      }
     }
   }
   g.enemies = g.enemies.filter((e) => e.hp > 0 && e.z > s.z - 4);
+}
+
+// A brute waiting at the back of a tide holds still until the tide has been worn down.
+function waiting(g, e) {
+  const td = g.tides.find((t) => t.id === e.waitFor);
+  if (!td || td.cleared) return false;
+  return !td.woke || td.alive > td.total * 0.35;
 }
 
 // A tide can't reach the squad through a wall (the gold lane beside it is safe once you're in).

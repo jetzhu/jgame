@@ -11,6 +11,10 @@ guard walled lanes of gold gates, pump gates improve while you shoot them, crate
 barrels explode. Every 3rd level opens with the tide: the squad starts from one soldier (plus squad
 upgrades) facing a packed horde that fills the road and creeps forward. A ladder of small `+` plates
 runs up one rail, buried in it, and a walled gold lane on the other side is plugged with sacks.
+Every 4th level (that isn't a boss or tide level) opens with a gatehouse: a steel wall the squad
+holds in front of while the horde queued behind it streams out of the door, a brute last; a steel
+strongbox plugs a slot into a gold lane. Brutes (mini-bosses that smash, stagger back and come again)
+also wait behind every tide and lead some hordes from level 10.
 Every 5th level ends with a boss; survivors climb a
 ×1..×5 coin ramp. Coins buy permanent upgrades. Endless mode runs until you are overrun.
 

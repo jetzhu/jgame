@@ -1,12 +1,12 @@
 // Rules of the simulation, on hand-built scenes (no level generator noise).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, step, applyGate, addEnemy, finishMultiplier, DT, BULLET_SPEED, HALF_W, HOLD } from '../src/sim.js';
+import { createGame, step, applyGate, addEnemy, finishMultiplier, DT, BULLET_SPEED, HALF_W, HOLD, GATE_HOLD } from '../src/sim.js';
 
 /** An empty campaign game: no generated content, a long track, the squad at the center. */
 function blank(opts = {}) {
   const g = createGame({ level: 1, ...opts });
-  Object.assign(g, { enemies: [], dormant: [], gates: [], vaults: [], slabs: [], tides: [], walls: [], crates: [], barrels: [], boss: null, length: 1e6 });
+  Object.assign(g, { enemies: [], dormant: [], gates: [], vaults: [], slabs: [], tides: [], gatehouses: [], walls: [], crates: [], barrels: [], boss: null, length: 1e6 });
   return g;
 }
 const run = (g, secs, input = null) => {
@@ -231,4 +231,94 @@ test('ladder gates taken one after another build a streak', () => {
   }
   assert.deepEqual(streaks, [1, 2, 3, 4, 5]);
   assert.equal(g.squad.count, 6);
+});
+
+test('a brute smashes soldiers, staggers back, and keeps coming until shot down', () => {
+  const g = blank({ start: 40 });
+  g.rate = 0; // nobody shoots
+  addEnemy(g, 0, 8, 'brute', 1e9, 5);
+  const smashes = [];
+  for (let i = 0; i < 20 * 60 && g.status === 'play'; i++) {
+    step(g, { tx: 0 });
+    for (const e of g.events) if (e.t === 'smash') smashes.push(e.n);
+  }
+  assert.ok(smashes.length >= 3, `smashed ${smashes.length} times`);
+  assert.ok(smashes.every((n) => n === 5));
+  const h = blank({ start: 60 });
+  addEnemy(h, 0, 25, 'brute', 300, 5);
+  let killed = false;
+  for (let i = 0; i < 20 * 60 && !killed; i++) {
+    step(h, { tx: 0 });
+    killed = h.events.some((e) => e.t === 'kill' && e.brute);
+  }
+  assert.ok(killed, 'a squad can shoot him down');
+});
+
+test('a brute behind a tide waits until the tide is worn down', () => {
+  const g = blank({ start: 10 });
+  g.tides.push({ id: 7, wallX: 2.5, goldSide: 1, z1: 60, front: Infinity, held: false, cleared: false });
+  for (let c = 0; c < 6; c++) {
+    const e = addEnemy(g, -3 + c * 0.6, 30, 'grunt', 1e9);
+    e.speed = 0;
+    e.pack = 7;
+  }
+  const b = addEnemy(g, 0, 33, 'brute', 1e9, 5);
+  b.waitFor = 7;
+  g.dormant.sort((a, c) => c.z - a.z);
+  run(g, 5, { tx: 0 });
+  assert.equal(b.z, 33, 'still waiting');
+  for (const e of g.enemies) if (e.pack) e.hp = 0;
+  run(g, 1, { tx: 0 });
+  assert.ok(b.z < 33, 'walks once the tide is gone');
+});
+
+/** A gatehouse at z=30: door in the middle, strongbox slot on the right, `n` queued grunts and a brute. */
+function gateScene({ start = 30, n = 20, boxHp = 1e9, bruteHp = 50 } = {}) {
+  const g = blank({ start });
+  const gh = { id: 9, z: 30, door: [-1, 1], slot: [2.5, HALF_W], box: 10, queue: [], cols: 3, sp: 0.6, pad: 0.4, rate: 4, acc: 0, woke: false, open: false, held: false };
+  const q = (e) => Object.assign(e, { held: 9, from: 9, walled: true }) && gh.queue.push(e);
+  for (let i = 0; i < n; i++) q(addEnemy(g, -0.6 + (i % 3) * 0.6, 30.7 + Math.floor(i / 3) * 0.6, 'grunt', 1));
+  q(addEnemy(g, 0, 30.7 + n / 3 + 1, 'brute', bruteHp, 5));
+  g.enemies.push(...g.dormant.splice(0));
+  g.vaults.push({ id: 10, x0: 2.6, x1: 4.4, z: 30, depth: 1.4, hp: boxHp, maxHp: boxHp, steel: true });
+  g.walls.push({ x: 2.5, z0: 29.3, z1: 50 });
+  g.gatehouses.push(gh);
+  return g;
+}
+
+test('a gatehouse holds the squad while its queue streams out; beating its brute drops the wall', () => {
+  const g = gateScene();
+  let out = 0;
+  let opened = false;
+  for (let i = 0; i < 40 * 60 && g.status === 'play' && !opened; i++) {
+    step(g, { tx: 0 });
+    assert.ok(g.squad.z <= 30 - GATE_HOLD + 1e-6 || g.gatehouses[0].open, `walked through the wall at ${g.squad.z}`);
+    out = Math.max(out, g.enemies.filter((e) => !e.held && e.hp > 0).length);
+    opened = g.events.some((e) => e.t === 'gateOpen');
+  }
+  assert.ok(opened, 'the wall dropped');
+  assert.ok(out > 0 && out < 20, `a stream, not a flood (${out} out at once)`);
+  run(g, 3, { tx: 0 });
+  assert.ok(g.squad.z > 31, 'walked on');
+});
+
+test('shooting out the strongbox lets the squad slip through the slot', () => {
+  const g = gateScene({ boxHp: 40, n: 200, bruteHp: 1e9 });
+  const box = g.vaults[0];
+  run(g, 15, { tx: 3.5 });
+  assert.ok(box.hp <= 0);
+  assert.ok(g.squad.z > 35, `through the slot to ${g.squad.z}`);
+  assert.ok(g.squad.x > 2.5);
+});
+
+test('bullets stop at a gatehouse wall except at the door and the slot', () => {
+  const g = gateScene({ n: 0, bruteHp: 1e9 });
+  g.enemies.length = 0; // nothing behind the door for the bullet to hit
+  g.gatehouses[0].queue.length = 0;
+  g.squad.z = 5; // far enough that the gatehouse hasn't woken (and found itself empty)
+  g.rate = 0;
+  g.bullets.push({ x: -3, z: 28, vx: 0, dmg: 5, life: 1 }, { x: 0, z: 28, vx: 0, dmg: 5, life: 1 });
+  for (let i = 0; i < 4; i++) step(g, null);
+  assert.equal(g.bullets.length, 1, 'the one at the wall is gone');
+  assert.equal(g.bullets[0].x, 0);
 });

@@ -84,6 +84,10 @@ systemd unit, a `services.txt` line with a health URL, a Caddy `handle_path` rou
   creep at a speed sized from the squad's firepower, and only peel off right in front of the squad. `holdTides()` stops
   the squad short of the tide's front *in its own line of fire* (outside the walled gold lane), so it advances only by
   shooting. Sacks (`vault.sack`) are a plug: the squad stops behind them instead of being pushed aside.
+- The gatehouse (`SEGMENTS.gatehouse`, opener of every 4th level that isn't a boss or tide level) keeps its queue as real
+  enemies flagged `held`; `runGatehouses()` releases them through the door at `gh.rate` and opens the wall once the
+  queue and its brute are gone. Bullets stop at the wall except at the door and the strongbox slot. Brutes
+  (`kind: 'brute'`) don't die on contact: they smash `power` soldiers and get knocked back.
 - Bullets are aggregated: at most ~30 visible bullets per second carry the whole squad's damage, and a bullet keeps its
   leftover damage after a kill, so total DPS = soldiers × rate × damage regardless of how many bullets are drawn.
 - `#debug` in the page URL exposes `window.__hg` (`startRun`, `ff(secs)` bot fast-forward, `S.autoplay`); `#debug&level=N`
