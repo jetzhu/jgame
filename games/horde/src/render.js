@@ -137,49 +137,40 @@ function targetTexture() {
   return tex;
 }
 
-// A concrete support pillar: just its number, big.
-function drawPillar(t, hp) {
+// Concrete face for vaults and pillars: the HP number, and cracks that spread as it weakens.
+function drawConcrete(t, hp, maxHp, seed) {
   const { c, ctx } = t;
-  const g = ctx.createLinearGradient(0, 0, c.width, 0);
-  g.addColorStop(0, '#c9c3b8');
-  g.addColorStop(1, '#a8a196');
+  const W = c.width;
+  const H = c.height;
+  const g = ctx.createLinearGradient(0, 0, W, 0);
+  g.addColorStop(0, '#cfc9be');
+  g.addColorStop(1, '#a9a297');
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, c.width, c.height);
-  ctx.fillStyle = 'rgba(0,0,0,.08)';
-  for (let i = 0; i < 40; i++) ctx.fillRect((i * 53) % c.width, (i * 97) % c.height, 6, 6);
-  bigText(ctx, String(Math.ceil(hp)), c.width / 2, c.height * 0.3, hp >= 10000 ? 58 : 76);
-  t.tex.needsUpdate = true;
-}
-
-function drawVault(t, hp, maxHp) {
-  const { c, ctx } = t;
-  const g = ctx.createLinearGradient(0, 0, 0, c.height);
-  g.addColorStop(0, '#aab4c3');
-  g.addColorStop(1, '#6b7584');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, c.width, c.height);
-  ctx.strokeStyle = '#4b5361';
-  ctx.lineWidth = 10;
-  ctx.strokeRect(14, 14, c.width - 28, c.height - 28);
-  // dial
-  const cx = c.width / 2;
-  const cy = c.height * 0.33;
-  ctx.fillStyle = '#39404c';
-  ctx.beginPath();
-  ctx.arc(cx, cy, 46, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#cfd6df';
-  ctx.beginPath();
-  ctx.arc(cx, cy, 34, 0, Math.PI * 2);
-  ctx.fill();
-  const a = -Math.PI / 2 + (1 - hp / maxHp) * Math.PI * 2;
-  ctx.strokeStyle = '#e23b3b';
-  ctx.lineWidth = 7;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy);
-  ctx.lineTo(cx + Math.cos(a) * 30, cy + Math.sin(a) * 30);
-  ctx.stroke();
-  bigText(ctx, String(Math.ceil(hp)), cx, c.height * 0.74, hp >= 10000 ? 62 : 82);
+  ctx.fillRect(0, 0, W, H);
+  let a = seed * 9301 + 49297;
+  const rnd = () => ((a = (a * 9301 + 49297) % 233280) / 233280);
+  ctx.fillStyle = 'rgba(0,0,0,.07)';
+  for (let i = 0; i < 50; i++) ctx.fillRect(rnd() * W, rnd() * H, 5, 5);
+  const frac = hp / maxHp;
+  const cracks = frac < 0.33 ? 9 : frac < 0.66 ? 4 : 0;
+  ctx.strokeStyle = 'rgba(45,40,35,.8)';
+  ctx.lineCap = 'round';
+  for (let k = 0; k < cracks; k++) {
+    // start on an edge, zigzag inward, with a branch
+    let x = rnd() < 0.5 ? (rnd() < 0.5 ? 0 : W) : rnd() * W;
+    let y = x === 0 || x === W ? rnd() * H : rnd() < 0.5 ? 0 : H;
+    ctx.lineWidth = 3 + rnd() * 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    for (let sgm = 0; sgm < 6; sgm++) {
+      x += (W / 2 - x) * 0.25 + (rnd() - 0.5) * 50;
+      y += (H / 2 - y) * 0.25 + (rnd() - 0.5) * 50;
+      ctx.lineTo(x, y);
+      if (sgm === 3) ctx.moveTo(x, y), ctx.lineTo(x + (rnd() - 0.5) * 70, y + (rnd() - 0.5) * 70), ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  }
+  bigText(ctx, String(Math.ceil(hp)), W / 2, H * 0.32, hp >= 10000 ? 58 : 76);
   t.tex.needsUpdate = true;
 }
 
@@ -425,7 +416,7 @@ export function createRenderer(canvas) {
     return { label: gateLabel(gt), color, locked, pump: !!gt.pump };
   }
 
-  const vaultBodyMat = new THREE.MeshLambertMaterial({ color: 0x8a95a5 });
+  const vaultBodyMat = new THREE.MeshLambertMaterial({ color: 0xbab4a9 });
   function makeVault(v) {
     if (v.pillar) return makePillar(v);
     const w = v.x1 - v.x0;
@@ -685,11 +676,11 @@ export function createRenderer(canvas) {
       if (o) o.popAt = performance.now();
       burst(e.x, 1.2, e.z, 18, new THREE.Color(e.good ? 0x6cc4ff : 0xff5d6c), 5, 0.12, 0.6, 3);
     } else if (e.t === 'vaultOpen') {
-      const o = objs.get(`v${e.id}`);
-      if (o) o.openAt = performance.now();
-      burst(e.x, 1.4, e.z, 50, new THREE.Color(0xc3ccd8), 7, 0.2, 0.9, 6);
-      burst(e.x, 1.4, e.z, 30, new THREE.Color(0xffd34d), 6, 0.14, 0.8, 7);
-      shake = 0.4;
+      // burst into rubble: big chunks from the whole height, then a dust cloud
+      for (let y = 0.3; y < 2.6; y += 0.45) burst(e.x, y, e.z, 9, cStone, 4.5, 0.38, 1.3, 3);
+      burst(e.x, 0.6, e.z, 16, cDust, 2, 0.6, 1.4, 1.5);
+      if (!e.pillar) burst(e.x, 1.4, e.z, 30, new THREE.Color(0xffd34d), 6, 0.14, 0.8, 7);
+      shake = Math.max(shake, 0.5);
     } else if (e.t === 'vaultHit') {
       if (Math.random() < 0.3) burst(e.x, 1 + Math.random(), e.z - 0.2, 1, new THREE.Color(0xffe27a), 2, 0.1, 0.25, 2);
     } else if (e.t === 'crate') {
@@ -928,15 +919,12 @@ export function createRenderer(canvas) {
       seen.add(key);
       const hp = Math.ceil(v.hp);
       if (hp !== o.shown && (now - (o.drawnAt || 0) > 60 || hp === 0)) {
-        if (o.pillar) drawPillar(o.t, v.hp);
-        else drawVault(o.t, v.hp, v.maxHp);
+        drawConcrete(o.t, v.hp, v.maxHp, v.id);
         o.shown = hp;
         o.drawnAt = now;
       }
       if (v.hp <= 0) {
-        const p = o.openAt ? Math.min(1, (now - o.openAt) / 500) : 1;
-        o.obj.position.y = -2.6 * p * p;
-        o.obj.visible = p < 1;
+        o.obj.visible = false; // it burst into rubble (see onEvent 'vaultOpen')
       } else {
         // rattle while being hit
         const hit = o.drawnAt && now - o.drawnAt < 80;
