@@ -1,5 +1,5 @@
 // A simple, decent player. Used by the balance tests and by the demo behind the title screen.
-import { LANES, LANE_W, RANGE, applyGate, dps, clamp } from './sim.js';
+import { LANES, LANE_W, HALF_W, RANGE, applyGate, dps, clamp } from './sim.js';
 
 const laneOf = (x) => (x < -LANE_W / 2 ? 0 : x > LANE_W / 2 ? 2 : 1);
 
@@ -9,7 +9,11 @@ function gatePlan(g) {
   const ahead = (z, lim) => z > s.z && z - s.z < lim;
   let best = null;
   let soon = false;
-  const sorted = g.gates.filter((gt) => !gt.used && ahead(gt.z, 24)).sort((a, b) => a.z - b.z);
+  // gates behind a tide's front can't be reached yet (except up the gold lane)
+  const blocked = (gt) =>
+    g.tides.length > 0 &&
+    g.enemies.some((e) => e.pack && e.hp > 0 && e.z > s.z && e.z < gt.z && e.x > gt.x0 - 0.3 && e.x < gt.x1 + 0.3);
+  const sorted = g.gates.filter((gt) => !gt.used && ahead(gt.z, 24) && !blocked(gt)).sort((a, b) => a.z - b.z);
   for (const gt of sorted) if (gt.z - s.z < 5) soon = true;
   for (const x of [...LANES, -2.25, 2.25]) {
     let c = s.count;
@@ -35,6 +39,23 @@ export function botInput(g, skill = 1) {
   const s = g.squad;
   const ahead = (z, lim) => z > s.z && z - s.z < lim;
   const speed = Math.max(1, s.speed);
+
+  // 0. a tide: shoot its front back; when it is far enough off, shoot the sacks or run the gold lane
+  for (const td of g.tides) {
+    if (td.cleared || !td.woke) continue;
+    const inGold = td.goldSide > 0 ? s.x > td.wallX : s.x < td.wallX;
+    const goldX = (td.wallX + td.goldSide * HALF_W) / 2;
+    const sacks = g.vaults.find((v) => v.sack && v.hp > 0 && Math.abs((v.x0 + v.x1) / 2 - goldX) < 0.5 && ahead(v.z + 1, RANGE));
+    if (inGold && !sacks) return { tx: goldX };
+    if (skill > 0.5) {
+      // break the sacks once the squad can do it quickly, while still below them
+      if (sacks && s.z < sacks.z - 1 && sacks.hp < dps(g) * (1 + 4 * skill)) return { tx: goldX };
+      if (!sacks && g.gates.some((gt) => gt.gold && !gt.used && ahead(gt.z, RANGE) && Math.abs((gt.x0 + gt.x1) / 2 - goldX) < 0.5))
+        return { tx: goldX };
+    }
+    // otherwise chew up the ladder rail
+    if (td.front - s.z < 12) return { tx: -td.goldSide * (HALF_W - Math.max(0.75, s.r * 0.8)) };
+  }
 
   const plan = gatePlan(g);
   if (plan.soon && plan.best && plan.best.score > s.count - 0.25) return { tx: plan.best.x };

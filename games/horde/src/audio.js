@@ -90,6 +90,17 @@ export const sound = {
       tone({ freq: 780, to: 1560, dur: 0.16, type: 'triangle', vol: 0.1, delay: 0.05 });
     } else tone({ freq: 400, to: 110, dur: 0.3, type: 'sawtooth', vol: 0.14 });
   },
+  // ladder pickups climb a major scale as the streak grows
+  ladder(streak = 1) {
+    const steps = [0, 2, 4, 5, 7, 9, 11];
+    const i = Math.min(streak - 1, 20);
+    const f = 523 * 2 ** ((Math.floor(i / 7) * 12 + steps[i % 7]) / 12);
+    tone({ freq: f, to: f * 1.5, dur: 0.08, type: 'square', vol: 0.09 });
+  },
+  rip() {
+    noise({ dur: 0.35, vol: 0.4, freq: 2500, type: 'bandpass', q: 0.7 });
+    noise({ dur: 0.6, vol: 0.25, freq: 500, delay: 0.08 });
+  },
   tick() {
     if (throttle('tick', 60)) tone({ freq: 1300, dur: 0.03, type: 'square', vol: 0.06 });
   },

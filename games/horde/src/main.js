@@ -1,7 +1,7 @@
 // Horde Gate: screens, input, game loop, HUD and saving. Game rules live in sim.js,
 // drawing in render.js.
-import { createGame, step, DT, HALF_W, progress } from './sim.js';
-import { isBossLevel } from './levels.js';
+import { createGame, step, DT, HALF_W, TIDE_GAP, progress } from './sim.js';
+import { isBossLevel, isTideLevel } from './levels.js';
 import { botInput } from './bot.js';
 import { createRenderer } from './render.js';
 import { sound } from './audio.js';
@@ -78,7 +78,9 @@ function startRun(mode) {
   $('hint').hidden = false;
   S.hintUntil = performance.now() + 3500;
   if (mode === 'endless') banner('ENDLESS', 'gold');
-  else banner(isBossLevel(save.level) ? `LEVEL ${save.level} · BOSS` : `LEVEL ${save.level}`, isBossLevel(save.level) ? 'red' : '');
+  else if (isBossLevel(save.level)) banner(`LEVEL ${save.level} · BOSS`, 'red');
+  else if (isTideLevel(save.level)) banner(`LEVEL ${save.level} · TIDE`, 'red');
+  else banner(`LEVEL ${save.level}`);
 }
 
 // ------------------------------------------------------------------ screens
@@ -90,7 +92,10 @@ function show(screen) {
   $('squadTag').hidden = !playing;
   $('eliteBars').hidden = !playing;
   if (!playing) $('bossTag').hidden = true;
-  if (screen !== 'play') $('hint').hidden = true;
+  if (screen !== 'play') {
+    $('hint').hidden = true;
+    $('danger').classList.remove('on');
+  }
   if (screen === 'home') refreshHome();
   if (screen === 'shop') refreshShop();
 }
@@ -232,13 +237,20 @@ function handleEvents(g) {
         }
         break;
       case 'gate':
-        sound.gate(e.good);
-        floatAt(e.label, e.x, 2.2, e.z, e.good ? 'good' : 'bad');
+        if (e.ladder) {
+          // a run of small pickups: a rising tick, and the streak once it gets going
+          sound.ladder(e.streak);
+          floatAt(e.streak >= 5 ? `${e.label} ×${e.streak}` : e.label, e.x, 1.8, e.z, 'good small');
+        } else {
+          sound.gate(e.good);
+          floatAt(e.label, e.x, 2.2, e.z, e.good ? 'good' : 'bad');
+        }
         break;
       case 'vaultHit':
         sound.metal();
         break;
       case 'vaultOpen':
+        if (e.sack) sound.rip();
         sound.open();
         if (!e.pillar) floatAt('UNLOCKED!', e.x, 3, e.z, 'gold');
         navigator.vibrate?.(40);
@@ -256,6 +268,14 @@ function handleEvents(g) {
         break;
       case 'pump':
         sound.tick();
+        break;
+      case 'tideHold':
+        banner('HOLD THE TIDE!', 'red');
+        break;
+      case 'tideClear':
+        sound.boom();
+        banner('TIDE BROKEN!', 'gold');
+        navigator.vibrate?.([60, 40, 60]);
         break;
       case 'crate':
         sound.crate();
@@ -332,6 +352,10 @@ function updateHud(g) {
     tag.firstChild.textContent = Math.ceil(b.hp);
     tag.lastChild.firstChild.style.width = `${(b.hp / b.maxHp) * 100}%`;
   }
+  // the tide's front is on the squad: red edges
+  let pinned = false;
+  for (const td of g.tides) if (!td.cleared && td.woke && td.front - s.z < TIDE_GAP + s.r * 0.7 - 0.6) pinned = true;
+  $('danger').classList.toggle('on', pinned && !S.demo && g.status === 'play');
   if (S.hintUntil && performance.now() > S.hintUntil) {
     $('hint').hidden = true;
     S.hintUntil = 0;

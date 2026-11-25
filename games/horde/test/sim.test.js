@@ -6,7 +6,7 @@ import { createGame, step, applyGate, addEnemy, finishMultiplier, DT, BULLET_SPE
 /** An empty campaign game: no generated content, a long track, the squad at the center. */
 function blank(opts = {}) {
   const g = createGame({ level: 1, ...opts });
-  Object.assign(g, { enemies: [], dormant: [], gates: [], vaults: [], slabs: [], walls: [], crates: [], barrels: [], boss: null, length: 1e6 });
+  Object.assign(g, { enemies: [], dormant: [], gates: [], vaults: [], slabs: [], tides: [], walls: [], crates: [], barrels: [], boss: null, length: 1e6 });
   return g;
 }
 const run = (g, secs, input = null) => {
@@ -176,4 +176,59 @@ test('shooting the pillar drops the slab: enemies under it are crushed, its gate
   assert.equal(g.status, 'play');
   assert.ok(g.squad.z > 45, 'the squad walked on');
   assert.equal(g.squad.count, 70, 'took the gate on the slab');
+});
+
+/** A tide block straight ahead: `rows` x 6 grunts with `hp`, creeping at `speed`. */
+function tideScene({ start = 10, hp = 1e9, speed = 0, rows = 6 } = {}) {
+  const g = blank({ start });
+  g.tides.push({ id: 50, wallX: 2.5, goldSide: 1, z1: 60, front: Infinity, held: false, cleared: false });
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < 6; c++) {
+      const e = addEnemy(g, -3.2 + c * 0.6, 30 + r * 0.6, 'grunt', hp);
+      e.speed = speed;
+      e.pack = 50;
+    }
+  g.dormant.sort((a, b) => b.z - a.z);
+  return g;
+}
+
+test('a tide wakes as one block and the squad cannot walk past its front', () => {
+  const g = tideScene();
+  run(g, 0.1, { tx: -1.5 });
+  assert.equal(g.dormant.length, 0, 'the whole pack woke together');
+  run(g, 10, { tx: -1.5 });
+  assert.ok(g.squad.z < 30 - 3, `held at ${g.squad.z}`);
+  assert.equal(g.status, 'play');
+});
+
+test('the gold lane beside a tide is not held, and tide enemies stay behind its wall', () => {
+  const g = tideScene({ speed: 0.8 });
+  g.walls.push({ x: 2.5, z0: 0, z1: 60 });
+  g.squad.x = g.squad.tx = 3.5;
+  run(g, 12, { tx: 3.5 });
+  assert.ok(g.squad.z > 40, `walked on to ${g.squad.z}`);
+  assert.ok(g.enemies.every((e) => e.x < 2.5));
+});
+
+test('shooting a tide back lets the squad advance; clearing it is announced', () => {
+  const g = tideScene({ start: 30, hp: 1, speed: 0.3 });
+  let cleared = false;
+  for (let i = 0; i < 20 * 60 && g.status === 'play'; i++) {
+    step(g, { tx: -1.5 });
+    cleared ||= g.events.some((e) => e.t === 'tideClear');
+  }
+  assert.ok(cleared);
+  assert.ok(g.squad.z > 40);
+});
+
+test('ladder gates taken one after another build a streak', () => {
+  const g = blank({ start: 1 });
+  for (let i = 0; i < 5; i++) g.gates.push({ id: 100 + i, x0: -1, x1: 1, z: 3 + i * 1.5, op: '+', value: 1, ladder: true, used: false });
+  const streaks = [];
+  for (let i = 0; i < 4 * 60; i++) {
+    step(g, { tx: 0 });
+    for (const e of g.events) if (e.t === 'gate') streaks.push(e.streak);
+  }
+  assert.deepEqual(streaks, [1, 2, 3, 4, 5]);
+  assert.equal(g.squad.count, 6);
 });

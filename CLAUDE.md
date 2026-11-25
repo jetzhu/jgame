@@ -80,6 +80,10 @@ systemd unit, a `services.txt` line with a health URL, a Caddy `handle_path` rou
 - The slab set piece reuses vault mechanics: its standing pillar is a vault with `pillar: true, slab: id`, and the gates
   on the slab are `lockedBy` that pillar. While a slab is up, `step()` holds the squad `HOLD` units in front of it; when
   the pillar breaks, `collapse()` crushes enemies under it. Its garage horde is flagged `garage` and wakes all at once.
+- The tide (`SEGMENTS.tide`, opener of every 3rd non-boss level) is a dense block of `pack` enemies that wake together,
+  creep at a speed sized from the squad's firepower, and only peel off right in front of the squad. `holdTides()` stops
+  the squad short of the tide's front *in its own line of fire* (outside the walled gold lane), so it advances only by
+  shooting. Sacks (`vault.sack`) are a plug: the squad stops behind them instead of being pushed aside.
 - Bullets are aggregated: at most ~30 visible bullets per second carry the whole squad's damage, and a bullet keeps its
   leftover damage after a kill, so total DPS = soldiers × rate × damage regardless of how many bullets are drawn.
 - `#debug` in the page URL exposes `window.__hg` (`startRun`, `ff(secs)` bot fast-forward, `S.autoplay`); `#debug&level=N`

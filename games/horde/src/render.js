@@ -62,6 +62,20 @@ function bigText(ctx, text, x, y, size, fill = '#fff') {
   ctx.fillText(text, x, y);
 }
 
+// The tag on a pile of sacks: its HP, on a rope-hung plank.
+function drawSackTag(t, hp) {
+  const { c, ctx } = t;
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.fillStyle = '#7a5530';
+  roundRect(ctx, 6, 6, c.width - 12, c.height - 12, 14);
+  ctx.fill();
+  ctx.strokeStyle = '#4a3218';
+  ctx.lineWidth = 6;
+  ctx.stroke();
+  bigText(ctx, String(Math.ceil(hp)), c.width / 2, c.height / 2 + 2, hp >= 10000 ? 52 : 66);
+  t.tex.needsUpdate = true;
+}
+
 // Plain gates are translucent with a white frame. Pump gates (they change when shot) are solid,
 // with a hazard-striped frame and a caption, so the two never look alike.
 function drawGate(t, label, color, locked, pump) {
@@ -297,6 +311,7 @@ export function createRenderer(canvas) {
   const cFlash = new THREE.Color(0xffffff);
   const cStone = new THREE.Color(COLORS.stone);
   const cDust = new THREE.Color(0xd9d4ca);
+  const cSand = new THREE.Color(0xd8b878);
 
   // Elites wear horns (instanced separately: there are only a few).
   const MAX_ELITES = 64;
@@ -385,10 +400,10 @@ export function createRenderer(canvas) {
     const group = new THREE.Group();
     const t = textCanvas(256, 160);
     const panel = new THREE.Mesh(
-      panelGeo(w - 0.2, 1.45),
+      panelGeo(w - 0.2, gt.ladder ? 1.05 : 1.45), // ladder gates: a run of small plates
       new THREE.MeshBasicMaterial({ map: t.tex, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: true }),
     );
-    panel.position.y = 1.25;
+    panel.position.y = gt.ladder ? 0.95 : 1.25;
     panel.rotation.y = Math.PI; // face the camera (which looks toward +z)
     group.add(panel);
     for (const x of [-w / 2 + 0.1, w / 2 - 0.1]) {
@@ -419,6 +434,7 @@ export function createRenderer(canvas) {
   const vaultBodyMat = new THREE.MeshLambertMaterial({ color: 0xbab4a9 });
   function makeVault(v) {
     if (v.pillar) return makePillar(v);
+    if (v.sack) return makeSacks(v);
     const w = v.x1 - v.x0;
     const group = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(w, 2.5, v.depth), vaultBodyMat);
@@ -432,6 +448,56 @@ export function createRenderer(canvas) {
     group.position.set((v.x0 + v.x1) / 2, 0, v.z);
     scene.add(group);
     return { obj: group, kind: 'vault', t, shown: -1, openAt: 0 };
+  }
+
+  // A heap of sandbags lashed with rope, plugging a lane: it bulges and shudders as it is shot,
+  // then splits open in a burst of sand.
+  const sackGeo = new THREE.SphereGeometry(0.5, 14, 10);
+  const sackMat = new THREE.MeshLambertMaterial({ color: 0xc9a36a });
+  const ropeGeo = new THREE.CylinderGeometry(0.045, 0.045, 1, 6);
+  const ropeMat = new THREE.MeshLambertMaterial({ color: 0x6b4a2a });
+  function makeSacks(v) {
+    const w = v.x1 - v.x0;
+    const group = new THREE.Group();
+    const bag = new THREE.Group();
+    group.add(bag);
+    const rows = [
+      [3, 0.35, 0.62],
+      [2, 0.95, 0.58],
+      [1, 1.5, 0.55],
+    ];
+    let k = 0;
+    for (const [n, y, h] of rows) {
+      const sw = (w / 3) * 1.08;
+      for (let i = 0; i < n; i++, k++) {
+        const m = new THREE.Mesh(sackGeo, sackMat);
+        m.scale.set(sw, h, v.depth * 0.9);
+        m.position.set((i - (n - 1) / 2) * sw * 0.92, y, (k % 2) * 0.08);
+        m.rotation.z = ((k * 37) % 7) * 0.03 - 0.09;
+        bag.add(m);
+      }
+    }
+    // ropes lashed across the front, corner to corner and around
+    for (const [x, y, rz, len] of [
+      [0, 0.95, 0.75, w * 1.2],
+      [0, 0.95, -0.75, w * 1.2],
+      [0, 0.6, Math.PI / 2, w * 1.05],
+      [0, 1.3, Math.PI / 2, w * 0.8],
+    ]) {
+      const r = new THREE.Mesh(ropeGeo, ropeMat);
+      r.scale.y = len;
+      r.rotation.z = rz;
+      r.position.set(x, y, -v.depth * 0.45);
+      bag.add(r);
+    }
+    const t = textCanvas(256, 128);
+    const tag = new THREE.Mesh(panelGeo(1.3, 0.65), new THREE.MeshBasicMaterial({ map: t.tex, transparent: true, side: THREE.DoubleSide }));
+    tag.position.set(0, 2.35, 0);
+    tag.rotation.y = Math.PI;
+    group.add(tag);
+    group.position.set((v.x0 + v.x1) / 2, 0, v.z);
+    scene.add(group);
+    return { obj: group, kind: 'vault', t, shown: -1, openAt: 0, sack: true, bag };
   }
 
   const concreteMat = new THREE.MeshLambertMaterial({ color: 0xbab4a9 });
@@ -563,7 +629,7 @@ export function createRenderer(canvas) {
   }
 
   // Geometries/materials shared by many objects; everything else belongs to one object.
-  const shared = new Set([postGeo, postMat, pumpPostMat, targetGeo, targetMat, vaultBodyMat, concreteMat, wallMat, crateGeo, barrelGeo, barrelMat, bandGeo, bandMat]);
+  const shared = new Set([postGeo, postMat, pumpPostMat, targetGeo, targetMat, vaultBodyMat, concreteMat, sackGeo, sackMat, ropeGeo, ropeMat, wallMat, crateGeo, barrelGeo, barrelMat, bandGeo, bandMat]);
   function disposeObj(obj) {
     scene.remove(obj);
     obj.traverse((m) => {
@@ -675,6 +741,13 @@ export function createRenderer(canvas) {
       const o = objs.get(`g${e.id}`);
       if (o) o.popAt = performance.now();
       burst(e.x, 1.2, e.z, 18, new THREE.Color(e.good ? 0x6cc4ff : 0xff5d6c), 5, 0.12, 0.6, 3);
+    } else if (e.t === 'vaultOpen' && e.sack) {
+      // the sacks split: sand everywhere, burlap scraps, and a flash of gold
+      for (let y = 0.3; y < 1.8; y += 0.4) burst(e.x, y, e.z, 14, cSand, 6, 0.16, 1.1, 5);
+      burst(e.x, 0.5, e.z, 18, cDust, 2.2, 0.55, 1.4, 1.5);
+      burst(e.x, 1, e.z, 10, new THREE.Color(0xa47b45), 5, 0.3, 1, 6);
+      burst(e.x, 1.4, e.z, 30, new THREE.Color(0xffd34d), 6, 0.14, 0.8, 7);
+      shake = Math.max(shake, 0.35);
     } else if (e.t === 'vaultOpen') {
       // burst into rubble: big chunks from the whole height, then a dust cloud
       for (let y = 0.3; y < 2.6; y += 0.45) burst(e.x, y, e.z, 9, cStone, 4.5, 0.38, 1.3, 3);
@@ -919,12 +992,19 @@ export function createRenderer(canvas) {
       seen.add(key);
       const hp = Math.ceil(v.hp);
       if (hp !== o.shown && (now - (o.drawnAt || 0) > 60 || hp === 0)) {
-        drawConcrete(o.t, v.hp, v.maxHp, v.id);
+        if (o.sack) drawSackTag(o.t, v.hp);
+        else drawConcrete(o.t, v.hp, v.maxHp, v.id);
         o.shown = hp;
         o.drawnAt = now;
       }
       if (v.hp <= 0) {
         o.obj.visible = false; // it burst into rubble (see onEvent 'vaultOpen')
+      } else if (o.sack) {
+        // bulge as it is hit, swelling as it weakens
+        const hit = o.drawnAt && now - o.drawnAt < 90;
+        const swell = 1 + 0.12 * (1 - v.hp / v.maxHp);
+        o.bag.scale.set(swell * (hit ? 1.06 : 1), swell * (hit ? 0.95 : 1), 1);
+        o.bag.rotation.z = hit ? (Math.random() - 0.5) * 0.06 : 0;
       } else {
         // rattle while being hit
         const hit = o.drawnAt && now - o.drawnAt < 80;

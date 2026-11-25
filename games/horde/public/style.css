@@ -71,6 +71,11 @@ button.icon {
 .ebar.boss { font-size: 20px; }
 .ebar.boss i { width: 110px; height: 10px; border-radius: 5px; }
 
+#danger { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s;
+  box-shadow: inset 0 0 90px 10px rgba(255, 40, 60, .65); }
+#danger.on { animation: danger .7s ease-in-out infinite alternate; }
+@keyframes danger { from { opacity: .35; } to { opacity: 1; } }
+
 #floaters { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
 .floater {
   position: absolute; transform: translate(-50%, -50%); font: 900 30px var(--font); color: #fff;

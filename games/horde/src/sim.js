@@ -19,6 +19,8 @@ const ACTIVATE = 40; // enemies start marching when the squad is this close
 const MAX_VISIBLE_BULLETS = 30;
 const ENEMY_R = 0.3;
 export const HOLD = 10; // how far in front of a raised slab the squad stops
+export const TIDE_SPEED = 0.8; // a tide creeps instead of charging
+export const TIDE_GAP = 3.5; // the squad stops this far short of a tide's front row
 
 /** Small seeded PRNG (mulberry32). */
 export function rng(seed) {
@@ -72,6 +74,7 @@ export function createGame(opts = {}) {
     gates: [],
     vaults: [], // also the pillars holding up slabs ({ pillar: true, slab: id })
     slabs: [], // raised gate fields: { id, z0, z1, tiltSide, pillar, down, fellAt }
+    tides: [], // packed hordes you can't walk past: { id, wallX, goldSide, z1, front, held, cleared }
     walls: [],
     crates: [],
     barrels: [],
@@ -84,6 +87,7 @@ export function createGame(opts = {}) {
     nextId: 1,
     events: [],
     stats: { kills: 0, gates: 0, peak: start, shots: 0 },
+    ladder: { n: 0, at: -9 }, // streak of ladder gates taken in quick succession
     result: null,
   };
   // Campaign levels are sized for the upgrades a typical player has by then (not the player's
@@ -148,8 +152,12 @@ export function step(g, input) {
     sortDormant(g);
   }
 
-  // wake enemies that are now close enough to march; a slab's garage empties all at once
-  while (g.dormant.length && g.dormant[g.dormant.length - 1].z < s.z + ACTIVATE) g.enemies.push(g.dormant.pop());
+  // wake enemies that are now close enough to march; a pack (a tide) and a slab's garage wake all at once
+  while (g.dormant.length && g.dormant[g.dormant.length - 1].z < s.z + ACTIVATE) {
+    const e = g.dormant.pop();
+    g.enemies.push(e);
+    if (e.pack) g.dormant = g.dormant.filter((x) => (x.pack === e.pack ? (g.enemies.push(x), false) : true));
+  }
   for (const sl of g.slabs)
     if (!sl.woke && sl.z0 - s.z < ACTIVATE - 10) {
       sl.woke = true;
@@ -184,15 +192,26 @@ export function step(g, input) {
     }
   }
 
+  holdTides(g, prevZ);
+
   // walls (lane rails): the squad's center can't cross them
   for (const w of g.walls) {
     if (s.z < w.z0 || s.z > w.z1) continue;
     if (prevX <= w.x && s.x > w.x) s.x = w.x - 0.001;
     else if (prevX >= w.x && s.x < w.x) s.x = w.x + 0.001;
   }
-  // closed vaults block their lane: push the squad out sideways
+  // closed vaults block their lane: push the squad out sideways. Sacks are a plug instead: a squad
+  // lined up behind them stops and shoots (it can still step out sideways).
   for (const v of g.vaults) {
     if (v.hp <= 0) continue;
+    if (v.sack) {
+      const stop = v.z - v.depth / 2 - 0.3 - s.r * 0.5;
+      if (s.x > v.x0 - 0.2 && s.x < v.x1 + 0.2 && s.z > stop && prevZ <= stop + 1e-9) {
+        s.z = Math.max(prevZ, stop);
+        s.speed = 0;
+      }
+      continue;
+    }
     if (s.z + 0.3 < v.z - v.depth / 2 || prevZ - 0.3 > v.z + v.depth / 2) continue;
     if (s.x > v.x0 && s.x < v.x1) {
       s.x = s.x - v.x0 < v.x1 - s.x ? v.x0 - 0.05 : v.x1 + 0.05;
@@ -212,7 +231,13 @@ export function step(g, input) {
     const before = s.count;
     s.count = applyGate(s.count, gate.op, gate.value);
     g.stats.gates++;
-    g.events.push({ t: 'gate', id: gate.id, good: s.count >= before, delta: s.count - before, label: gateLabel(gate), x: s.x, z: gate.z });
+    let streak = 0;
+    if (gate.ladder) {
+      g.ladder.n = g.t - g.ladder.at < 2.5 ? g.ladder.n + 1 : 1;
+      g.ladder.at = g.t;
+      streak = g.ladder.n;
+    }
+    g.events.push({ t: 'gate', id: gate.id, good: s.count >= before, delta: s.count - before, label: gateLabel(gate), x: s.x, z: gate.z, ladder: !!gate.ladder, streak });
     // the other gates of a choice row are gone once one is taken
     if (gate.group) for (const o of g.gates) if (o.group === gate.group) o.used = true;
   }
@@ -239,6 +264,7 @@ export function step(g, input) {
   g.barrels = g.barrels.filter((x) => !x.dead && x.z > s.z - 15);
   g.walls = g.walls.filter((x) => x.z1 > s.z - 15);
   g.slabs = g.slabs.filter((x) => x.z1 > s.z - 15);
+  g.tides = g.tides.filter((x) => x.z1 > s.z - 15);
   g.vaults = g.vaults.filter((x) => x.z > s.z - 15 || g.gates.some((gt) => gt.lockedBy === x.id));
 
   if (s.count <= 0) {
@@ -388,7 +414,7 @@ function damage(g, hit, b) {
     o.hp = Math.max(0, o.hp - b.dmg);
     g.events.push({ t: 'vaultHit', id: o.id, x: b.x, z: hit.z });
     if (o.hp <= 0) {
-      g.events.push({ t: 'vaultOpen', id: o.id, x: (o.x0 + o.x1) / 2, z: o.z, pillar: !!o.pillar });
+      g.events.push({ t: 'vaultOpen', id: o.id, x: (o.x0 + o.x1) / 2, z: o.z, pillar: !!o.pillar, sack: !!o.sack });
       if (o.slab) collapse(g, g.slabs.find((sl) => sl.id === o.slab));
     }
   } else if (hit.kind === 'pump') {
@@ -433,6 +459,43 @@ function collapse(g, sl) {
   g.events.push({ t: 'slabFall', id: sl.id, z0: sl.z0, z1: sl.z1, crushed });
 }
 
+// A tide is a packed horde filling the road except its gold lane: there is no walking past it.
+// On its side of the gold lane's wall, the squad can't advance past the tide's front ahead of it, so the
+// ladder gates along the rail open up only as fast as the front is shot away (and the front keeps
+// creeping in). The gold lane behind the sacks is the way around.
+function holdTides(g, prevZ) {
+  const s = g.squad;
+  for (const td of g.tides) {
+    if (td.cleared) continue;
+    let front = Infinity;
+    let alive = 0;
+    for (const e of g.enemies)
+      if (e.pack === td.id && e.hp > 0) {
+        alive++;
+        // the front that matters is the part right ahead of the squad: chew a channel into it
+        if (e.z > s.z - 0.2 && e.z < front && Math.abs(e.x - s.x) < s.r * 0.8 + e.r) front = e.z;
+      }
+    td.front = front;
+    if (!alive && td.woke) {
+      td.cleared = true;
+      g.events.push({ t: 'tideClear', id: td.id });
+      continue;
+    }
+    if (alive) td.woke = true;
+    const inLane = td.goldSide > 0 ? s.x > td.wallX : s.x < td.wallX;
+    if (inLane || front === Infinity) continue;
+    const limit = front - TIDE_GAP - s.r * 0.7;
+    if (s.z > limit) {
+      s.z = Math.max(prevZ, limit);
+      s.speed = Math.min(s.speed, Math.max(0, (s.z - prevZ) / DT));
+      if (!td.held) {
+        td.held = true;
+        g.events.push({ t: 'tideHold', id: td.id });
+      }
+    }
+  }
+}
+
 function openCrate(g, c) {
   const s = g.squad;
   if (c.kind === 'rate') g.rate *= 1.3;
@@ -468,12 +531,19 @@ function moveEnemies(g) {
     if (e.hp <= 0) continue;
     e.z -= e.speed * DT;
     const dz = e.z - s.z;
-    if (dz < 9) {
+    // a tide only peels off right in front of the squad, slowly, and stays behind the gold lane's
+    // wall; the rest of it keeps creeping straight on
+    if (e.pack ? dz < 4 && Math.abs(s.x - e.x) < s.r + 0.6 : dz < 9) {
+      const px = e.x;
       const dx = s.x - e.x;
-      e.x += clamp(dx, -1.6 * DT, 1.6 * DT);
+      const lat = e.pack ? 1.1 : 1.6;
+      e.x += clamp(dx, -lat * DT, lat * DT);
+      if (e.pack)
+        for (const w of g.walls)
+          if (e.z > w.z0 && e.z < w.z1 && (px - w.x) * (e.x - w.x) <= 0) e.x = px < w.x ? w.x - e.r : w.x + e.r;
     }
     // contact: each enemy that reaches the squad takes soldiers with it
-    if (Math.abs(dz) < s.r * 0.7 + e.r && Math.abs(s.x - e.x) < s.r + e.r) {
+    if (Math.abs(dz) < s.r * 0.7 + e.r && Math.abs(s.x - e.x) < s.r + e.r && !(e.pack && acrossWall(g, e, s))) {
       const loss = Math.min(s.count, e.power);
       s.count -= loss;
       e.hp = 0;
@@ -481,6 +551,12 @@ function moveEnemies(g) {
     }
   }
   g.enemies = g.enemies.filter((e) => e.hp > 0 && e.z > s.z - 4);
+}
+
+// A tide can't reach the squad through a wall (the gold lane beside it is safe once you're in).
+function acrossWall(g, e, s) {
+  for (const w of g.walls) if (e.z > w.z0 && e.z < w.z1 && (e.x - w.x) * (s.x - w.x) < 0) return true;
+  return false;
 }
 
 function moveBoss(g) {

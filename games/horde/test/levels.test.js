@@ -83,3 +83,13 @@ test('upgrades: costs grow, buying needs coins, rewards favor wins', () => {
   const loss = reward({ won: false, level: 5, progress: 0.9 });
   assert.ok(win > loss * 2 && loss > 0);
 });
+
+test('tide levels start from one soldier (plus squad upgrades) and open with the tide', () => {
+  const g = createGame({ level: 6, start: 5 });
+  assert.equal(g.squad.count, 1);
+  assert.equal(g.segs[0].name, 'tide');
+  assert.equal(createGame({ level: 6, start: 9 }).squad.count, 5);
+  assert.equal(createGame({ level: 5, start: 5 }).squad.count, 5, 'boss levels are not tide levels');
+  for (let level = 1; level <= 40; level++)
+    assert.ok(createGame({ level }).segs.filter((s) => s.name === 'tide').length <= 1, `level ${level}: one tide at most`);
+});

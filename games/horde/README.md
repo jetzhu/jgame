@@ -8,7 +8,10 @@ takes soldiers with it. The signature set piece is the slab: a field of gates ra
 slab over a garage full of the horde. The squad holds in front of it until the pillar is shot
 down; the slab then crushes whatever is still underneath and its gates become walkable. Vaults
 guard walled lanes of gold gates, pump gates improve while you shoot them, crates give power-ups,
-barrels explode. Every 5th level ends with a boss; survivors climb a
+barrels explode. Every 3rd level opens with the tide: the squad starts from one soldier (plus squad
+upgrades) facing a packed horde that fills the road and creeps forward. A ladder of small `+` plates
+runs up one rail, buried in it, and a walled gold lane on the other side is plugged with sacks.
+Every 5th level ends with a boss; survivors climb a
 ×1..×5 coin ramp. Coins buy permanent upgrades. Endless mode runs until you are overrun.
 
 ## Layout
