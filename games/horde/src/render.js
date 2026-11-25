@@ -560,7 +560,15 @@ export function createRenderer(canvas) {
     }
     group.position.set(b.x, 0, b.z);
     scene.add(group);
-    return { obj: group, kind: 'boss', body };
+    // stone fists: raised during a slam wind-up, smashed down on impact
+    const fistMat = new THREE.MeshLambertMaterial({ color: 0x3b3f4a });
+    const fists = [-1, 1].map((sx) => {
+      const f = new THREE.Mesh(new THREE.SphereGeometry(0.55, 16, 12), fistMat);
+      f.position.set(sx * b.r * 1.05, b.r * 0.85, -0.2);
+      group.add(f);
+      return f;
+    });
+    return { obj: group, kind: 'boss', body, fists, base: b.r };
   }
 
   // Geometries/materials shared by many objects; everything else belongs to one object.
@@ -613,6 +621,28 @@ export function createRenderer(canvas) {
     }
     scene.add(group);
     return group;
+  }
+
+  // ---------------------------------------------------------------- boss slam markers
+  const slamRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.9, 1, 48).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xff2d40, transparent: true, depthWrite: false }),
+  );
+  const slamFill = new THREE.Mesh(
+    new THREE.CircleGeometry(1, 48).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xff2d40, transparent: true, depthWrite: false }),
+  );
+  const wave = {
+    t0: 0,
+    r: 1,
+    mesh: new THREE.Mesh(
+      new THREE.RingGeometry(0.85, 1, 48).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0xfff1d0, transparent: true, depthWrite: false }),
+    ),
+  };
+  for (const m of [slamRing, slamFill, wave.mesh]) {
+    m.visible = false;
+    scene.add(m);
   }
 
   // ---------------------------------------------------------------- squad formation
@@ -674,6 +704,14 @@ export function createRenderer(canvas) {
       burst(e.x, 1.6, e.z, 120, new THREE.Color(0x9c1838), 10, 0.25, 1.1, 8);
       burst(e.x, 1.6, e.z, 60, new THREE.Color(0xffd34d), 8, 0.18, 1.1, 9);
       shake = 0.8;
+    } else if (e.t === 'slam') {
+      const o = objs.get('boss');
+      if (o) o.slamAt = performance.now();
+      Object.assign(wave, { t0: performance.now(), r: e.r });
+      wave.mesh.position.set(e.x, 0.04, e.z);
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 8) burst(e.x + Math.cos(a) * e.r, 0.2, e.z + Math.sin(a) * e.r, 2, cDust, 3, 0.3, 0.8, 2);
+      if (e.hit) burst(e.x, 0.4, e.z, 20, new THREE.Color(COLORS.soldier), 6, 0.14, 0.7, 5);
+      shake = Math.max(shake, e.hit ? 0.7 : 0.4);
     } else if (e.t === 'slabFall') {
       const st = slabState.get(e.id);
       const hi = st ? -st.pivotX : 0;
@@ -935,10 +973,43 @@ export function createRenderer(canvas) {
       if (!o) objs.set('boss', (o = makeBoss(g.boss)));
       seen.add('boss');
       o.obj.position.set(g.boss.x, 0, g.boss.z);
-      const stomp = g.boss.active ? Math.abs(Math.sin(time * 4)) : 0;
-      o.obj.position.y = stomp * 0.25;
-      o.obj.rotation.z = Math.sin(time * 4) * 0.06;
-      o.body.scale.set(1 + stomp * 0.04, 1 - stomp * 0.04, 1);
+      const sl = g.boss.slam;
+      const r = o.base;
+      if (sl) {
+        // wind-up: rear back, fists high
+        const p = Math.min(1, sl.t / sl.dur);
+        o.obj.rotation.set(-0.3 * p, 0, Math.sin(time * 30) * 0.03 * p);
+        o.obj.position.y = 0.3 * p;
+        o.fists.forEach((f, i) => f.position.set((i ? 1 : -1) * r * (1.05 - 0.55 * p), r * (0.85 + 1.5 * p), -0.2 + 0.4 * p));
+      } else {
+        const since = o.slamAt ? (now - o.slamAt) / 350 : 1;
+        const stomp = g.boss.active ? Math.abs(Math.sin(time * 4)) : 0;
+        o.obj.rotation.set(since < 1 ? 0.35 * (1 - since) : 0, 0, Math.sin(time * 4) * 0.06);
+        o.obj.position.y = since < 1 ? 0 : stomp * 0.25;
+        o.body.scale.set(1 + stomp * 0.04, 1 - stomp * 0.04, 1);
+        // fists smashed into the ground in front, then back to the sides
+        const k = Math.min(1, Math.max(0, since));
+        o.fists.forEach((f, i) => f.position.set((i ? 1 : -1) * r * (0.5 + 0.55 * k), 0.5 + (r * 0.85 - 0.5) * k, -1.2 + 1.0 * k));
+      }
+    }
+    // slam warning on the ground: a ring that fills up
+    const slam = g.boss && !g.boss.dead && g.boss.slam;
+    slamRing.visible = slamFill.visible = !!slam;
+    if (slam) {
+      const p = Math.min(1, slam.t / slam.dur);
+      slamRing.position.set(slam.x, 0.03, slam.z);
+      slamRing.scale.setScalar(slam.r);
+      slamFill.position.set(slam.x, 0.025, slam.z);
+      slamFill.scale.setScalar(slam.r * p);
+      slamFill.material.opacity = 0.25 + 0.3 * p;
+      slamRing.material.opacity = 0.6 + 0.4 * Math.abs(Math.sin(time * (8 + 14 * p)));
+    }
+    if (wave.t0) {
+      const p = (now - wave.t0) / 450;
+      wave.mesh.visible = p < 1;
+      wave.mesh.scale.setScalar(wave.r * (0.6 + 1.2 * p));
+      wave.mesh.material.opacity = 0.8 * (1 - p);
+      if (p >= 1) wave.t0 = 0;
     }
     for (const [key, o] of objs) {
       if (seen.has(key)) continue;

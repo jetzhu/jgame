@@ -89,6 +89,7 @@ function show(screen) {
   $('hud').hidden = !playing;
   $('squadTag').hidden = !playing;
   $('eliteBars').hidden = !playing;
+  if (!playing) $('bossTag').hidden = true;
   if (screen !== 'play') $('hint').hidden = true;
   if (screen === 'home') refreshHome();
   if (screen === 'shop') refreshShop();
@@ -267,6 +268,14 @@ function handleEvents(g) {
         sound.boss();
         banner('BOSS!', 'red');
         break;
+      case 'slamWarn':
+        sound.boss();
+        break;
+      case 'slam':
+        sound.boom();
+        if (e.hit) floatAt(`-${e.n}`, g.squad.x, 1.8, g.squad.z, 'bad');
+        navigator.vibrate?.(e.hit ? 120 : 40);
+        break;
       case 'bossDown':
         sound.boom();
         banner('BOSS DOWN!', 'gold');
@@ -307,8 +316,18 @@ function updateHud(g) {
   tag.textContent = s.count;
   updateEliteBars(g);
   const b = g.boss;
-  $('bossBar').hidden = !(b && b.active && !b.dead && !S.demo);
-  if (b && b.active) $('bossFill').style.width = `${(b.hp / b.maxHp) * 100}%`;
+  const fighting = !!(b && b.active && !b.dead && !S.demo);
+  $('bossBar').hidden = !fighting;
+  $('bossTag').hidden = !fighting;
+  if (fighting) {
+    $('bossFill').style.width = `${(b.hp / b.maxHp) * 100}%`;
+    const p = renderer.project(b.x, b.r * 2.9, b.z);
+    const tag = $('bossTag');
+    tag.style.left = `${p.x}px`;
+    tag.style.top = `${p.y}px`;
+    tag.firstChild.textContent = Math.ceil(b.hp);
+    tag.lastChild.firstChild.style.width = `${(b.hp / b.maxHp) * 100}%`;
+  }
   if (S.hintUntil && performance.now() > S.hintUntil) {
     $('hint').hidden = true;
     S.hintUntil = 0;

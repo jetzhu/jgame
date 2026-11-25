@@ -496,6 +496,26 @@ function moveBoss(g) {
   b.contact = dist < b.r + s.r * 0.6;
   if (!b.contact) b.z -= b.speed * DT;
   b.x += clamp(s.x - b.x, -1.5 * DT, 1.5 * DT);
+  // Ground slam: mark a circle where the squad is headed, let it fill, then smash it. Soldiers
+  // only get hit if the squad is still inside when the fists land: steer out.
+  if (b.slam) {
+    b.slam.t += DT;
+    if (b.slam.t >= b.slam.dur) {
+      const sl = b.slam;
+      const hit = Math.hypot(s.x - sl.x, s.z - sl.z) < sl.r + s.r * 0.4;
+      const n = hit ? Math.min(s.count, Math.ceil(b.slamPower)) : 0;
+      s.count -= n;
+      g.events.push({ t: 'slam', x: sl.x, z: sl.z, r: sl.r, hit, n });
+      b.slam = null;
+      b.slamCd = b.slamEvery;
+    }
+  } else if (dist < 22) {
+    b.slamCd -= DT;
+    if (b.slamCd <= 0) {
+      b.slam = { x: s.x, z: s.z + Math.min(1.2, s.speed * 0.5), r: 2.3, t: 0, dur: 1.1 };
+      g.events.push({ t: 'slamWarn', x: b.slam.x, z: b.slam.z, r: b.slam.r });
+    }
+  }
   if (b.contact) {
     b.drainAcc += b.drain * DT;
     if (b.drainAcc >= 1) {

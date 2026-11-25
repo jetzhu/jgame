@@ -209,7 +209,7 @@ SEGMENTS.collapse = function (g, z0) {
         slab: slab.id,
         gold: c === goldCol,
       });
-  g.gen.E += rows * (gold * 0.5 + fieldSmall * 0.5);
+  g.gen.E += rows * gold * 0.85; // players run the gold column
   return L1 + D + 6;
 };
 
@@ -232,6 +232,10 @@ function pickSegment(rand, d, last) {
 
 function addBoss(g, z) {
   const gen = g.gen;
+  // a small escort trails the boss
+  const before = g.dormant.length;
+  placeHorde(g, soak(gen, 0.5), -2.2, 2.2, z + 2.5);
+  for (let i = before; i < g.dormant.length; i++) g.dormant[i].speed = 1.4;
   const hp = Math.ceil(gen.E * gen.perSoldier * 5 * (1 + Math.min(gen.d, 40) * 0.02) * (gen.ramp || 1));
   g.boss = {
     x: 0,
@@ -242,6 +246,10 @@ function addBoss(g, z) {
     speed: 1.4,
     drain: 3 + gen.E * 0.08,
     drainAcc: 0,
+    slam: null, // { x, z, r, t, dur } while a slam is winding up
+    slamCd: 1.2,
+    slamEvery: 3.2,
+    slamPower: 4 + gen.E * 0.25,
     active: false,
     contact: false,
     dead: false,

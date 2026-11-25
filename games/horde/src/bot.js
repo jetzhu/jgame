@@ -42,7 +42,16 @@ export function botInput(g, skill = 1) {
   // 1. enemies close in front: shoot the nearest cluster
   let near = null;
   for (const e of g.enemies) if (ahead(e.z, 12 + 6 * skill) && (!near || e.z < near.z)) near = e;
-  if (g.boss && g.boss.active && !g.boss.dead) return { tx: g.boss.x };
+  const boss = g.boss;
+  if (boss && boss.active && !boss.dead) {
+    // step out of a slam circle, toward the roomier side; otherwise shoot the boss
+    const sl = boss.slam;
+    if (sl && skill > 0.4 && Math.abs(s.x - sl.x) < sl.r + s.r * 0.4 + 0.3) {
+      const side = sl.x > 0 ? -1 : 1;
+      return { tx: sl.x + side * (sl.r + s.r * 0.4 + 0.8) };
+    }
+    return { tx: boss.x };
+  }
   if (near) {
     let sx = 0;
     let n = 0;
