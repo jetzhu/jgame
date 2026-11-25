@@ -54,6 +54,13 @@ export function botInput(g, skill = 1) {
     return { tx: sx / n };
   }
 
+  // 2a. stopped in front of a raised slab: bring its pillar down
+  for (const v of g.vaults) {
+    if (!v.slab || v.hp <= 0 || !ahead(v.z, RANGE)) continue;
+    const sl = g.slabs.find((x) => x.id === v.slab);
+    if (sl && !sl.down && sl.z0 - s.z < 16) return { tx: (v.x0 + v.x1) / 2 };
+  }
+
   // 2. a vault whose gold lane is worth it and can be cracked in time
   if (skill > 0.5)
     for (const v of g.vaults) {

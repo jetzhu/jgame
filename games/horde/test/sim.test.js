@@ -1,12 +1,12 @@
 // Rules of the simulation, on hand-built scenes (no level generator noise).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, step, applyGate, addEnemy, finishMultiplier, DT, BULLET_SPEED, HALF_W } from '../src/sim.js';
+import { createGame, step, applyGate, addEnemy, finishMultiplier, DT, BULLET_SPEED, HALF_W, HOLD } from '../src/sim.js';
 
 /** An empty campaign game: no generated content, a long track, the squad at the center. */
 function blank(opts = {}) {
   const g = createGame({ level: 1, ...opts });
-  Object.assign(g, { enemies: [], dormant: [], gates: [], vaults: [], walls: [], crates: [], barrels: [], boss: null, length: 1e6 });
+  Object.assign(g, { enemies: [], dormant: [], gates: [], vaults: [], slabs: [], walls: [], crates: [], barrels: [], boss: null, length: 1e6 });
   return g;
 }
 const run = (g, secs, input = null) => {
@@ -144,4 +144,36 @@ test('holding boost doubles forward speed', () => {
   near.enemies.push(...near.dormant.splice(0));
   step(near, { tx: 0, boost: true });
   assert.ok(near.squad.speed < 2 * 6 && near.squad.speed > 0);
+});
+
+/** A raised slab at z=30..50 held by one pillar on the right, with a locked gate on top. */
+function slabScene(pillarHp) {
+  const g = blank({ start: 20 });
+  g.slabs.push({ id: 1, z0: 30, z1: 50, tiltSide: -1, pillar: 2, down: false, fellAt: null });
+  g.vaults.push({ id: 2, x0: 2.6, x1: 4.35, z: 30, depth: 1.6, hp: pillarHp, maxHp: pillarHp, pillar: true, slab: 1 });
+  g.gates.push({ id: 3, x0: 1.8, x1: HALF_W, z: 40, op: '+', value: 50, lockedBy: 2, slab: 1, used: false });
+  return g;
+}
+
+test('the squad holds in front of a raised slab', () => {
+  const g = slabScene(1e9);
+  run(g, 10, { tx: 0 });
+  assert.ok(Math.abs(g.squad.z - (30 - HOLD)) < 1e-6, `stopped at ${g.squad.z}`);
+  assert.equal(g.status, 'play');
+});
+
+test('shooting the pillar drops the slab: enemies under it are crushed, its gates open', () => {
+  const g = slabScene(80);
+  for (let i = 0; i < 6; i++) addEnemy(g, -3, 45 + i * 0.5, 'grunt', 1e6); // under the slab, far from the squad
+  for (const e of g.dormant) e.speed = 0;
+  let fell = null;
+  for (let i = 0; i < 30 * 60 && g.status === 'play'; i++) {
+    step(g, { tx: 3.4 });
+    fell ||= g.events.find((e) => e.t === 'slabFall');
+  }
+  assert.ok(fell, 'slab fell');
+  assert.equal(fell.crushed, 6);
+  assert.equal(g.status, 'play');
+  assert.ok(g.squad.z > 45, 'the squad walked on');
+  assert.equal(g.squad.count, 70, 'took the gate on the slab');
 });

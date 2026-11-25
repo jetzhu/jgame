@@ -153,12 +153,66 @@ const SEGMENTS = {
   },
 };
 
+// The set piece: a concrete slab covered in gates, raised over a garage full of the horde. One
+// pillar is already down (the slab tilts to that side, and a strip of small gates runs along that
+// edge); the other pillar has HP and holds the slab up. The squad must stop in front of the slab,
+// survive the horde pouring out, and shoot the pillar. Then the slab slams flat, crushing what's
+// still underneath, and its field of gates is open: small + gates in every column, gold ones in the
+// column on the pillar's side.
+SEGMENTS.collapse = function (g, z0) {
+  const { rand, E } = g.gen;
+  const tilt = rand() < 0.5 ? -1 : 1; // side that is already down
+  const pillarSide = -tilt;
+  // approach: small gates along the low edge
+  const L1 = 30; // the strip ends before the hold line (sim HOLD = 10)
+  const ex0 = tilt < 0 ? -HALF_W : HALF_W - 1.6;
+  const small = Math.max(1, nice(E / 30));
+  let n = 0;
+  for (let z = z0 + 4; z < z0 + L1 - 12; z += 1.8, n++) gate(g, ex0, ex0 + 1.6, z, '+', small, { row: true });
+  g.gen.E = E + n * small * 0.6;
+  // slab, pillar and the garage horde
+  const sz0 = z0 + L1;
+  const D = 24 + Math.round(rand() * 8);
+  const slab = { id: newId(g), z0: sz0, z1: sz0 + D, tiltSide: tilt, pillar: 0, down: false, fellAt: null };
+  const [px0, px1] = pillarSide < 0 ? [-HALF_W + 0.15, -HALF_W + 1.9] : [HALF_W - 1.9, HALF_W - 0.15];
+  const hp = Math.ceil(g.gen.E * g.gen.perSoldier * (3 + rand() * 1.5));
+  const pillar = { id: newId(g), x0: px0, x1: px1, z: sz0, depth: 1.6, hp, maxHp: hp, pillar: true, slab: slab.id };
+  slab.pillar = pillar.id;
+  g.vaults.push(pillar);
+  g.slabs.push(slab);
+  // the garage horde shuffles out more slowly than an open-road horde
+  const before = g.dormant.length;
+  placeHorde(g, soak(g.gen, 2.2), -HALF_W + 0.3, HALF_W - 0.3, sz0 + 1);
+  for (let i = before; i < g.dormant.length; i++) {
+    g.dormant[i].speed *= 0.6;
+    g.dormant[i].garage = slab.id;
+  }
+  lose(g.gen, 0.12);
+  // the field on top
+  const cols = 5;
+  const w = (2 * HALF_W) / cols;
+  const goldCol = pillarSide < 0 ? 0 : cols - 1;
+  const fieldSmall = Math.max(1, nice(g.gen.E / 25));
+  const gold = nice(g.gen.E * 0.08 + 3);
+  let rows = 0;
+  for (let z = sz0 + 2; z < sz0 + D - 1; z += 2.4, rows++)
+    for (let c = 0; c < cols; c++)
+      gate(g, -HALF_W + c * w, -HALF_W + (c + 1) * w, z, '+', c === goldCol ? gold : fieldSmall, {
+        lockedBy: pillar.id,
+        slab: slab.id,
+        gold: c === goldCol,
+      });
+  g.gen.E += rows * (gold * 0.5 + fieldSmall * 0.5);
+  return L1 + D + 6;
+};
+
 const WEIGHTS = [
   ['horde', 3, 1],
   ['choice', 2, 1],
   ['gauntlet', 2.2, 2],
   ['crate', 1.2, 2],
   ['pump', 1, 3],
+  ['collapse', 1.3, 3],
 ];
 
 function pickSegment(rand, d, last) {
@@ -195,8 +249,11 @@ export function buildLevel(g) {
   const d = g.level;
   const plan =
     d === 1
-      ? ['choice', 'horde', 'choice', 'gauntlet']
-      : ['choice', ...Array.from({ length: 2 + Math.min(8, Math.floor(d * 0.5)) }, () => null)];
+      ? ['choice', 'horde', 'collapse']
+      : d === 2
+        ? ['choice', 'gauntlet', 'collapse']
+        : ['choice', ...Array.from({ length: 2 + Math.min(8, Math.floor(d * 0.5)) }, () => null)];
+  if (isBossLevel(d) && plan[plan.length - 1] !== 'collapse') plan.push('collapse');
   let z = 8;
   let last = null;
   for (let [i, name] of plan.entries()) {
@@ -207,8 +264,9 @@ export function buildLevel(g) {
     last = name;
   }
   if (isBossLevel(d)) {
-    addBoss(g, z + 14);
-    return z + 16;
+    // the boss waits at the far end of the slab and steps out once it falls
+    addBoss(g, z + 6);
+    return z + 8;
   }
   const len = placeHorde(g, soak(gen, 3), -HALF_W, HALF_W, z + 12) + 16;
   g.segs.push({ name: 'final', z0: z, z1: z + len });

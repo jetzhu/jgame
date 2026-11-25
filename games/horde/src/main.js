@@ -234,8 +234,19 @@ function handleEvents(g) {
         break;
       case 'vaultOpen':
         sound.open();
-        floatAt('UNLOCKED!', e.x, 3, e.z, 'gold');
+        if (!e.pillar) floatAt('UNLOCKED!', e.x, 3, e.z, 'gold');
         navigator.vibrate?.(40);
+        break;
+      case 'slabHold': {
+        banner('BRING IT DOWN!', 'gold');
+        const v = g.vaults.find((x) => x.id === e.pillar);
+        if (v) floatAt('SHOOT!', (v.x0 + v.x1) / 2, 3.4, v.z, 'gold');
+        break;
+      }
+      case 'slabFall':
+        sound.boom();
+        banner(e.crushed ? `CRUSHED ×${e.crushed}` : 'GO!', 'gold');
+        navigator.vibrate?.([80, 40, 80]);
         break;
       case 'pump':
         sound.tick();
@@ -283,9 +294,9 @@ function updateHud(g) {
   $('hudCoins').textContent = save.coins;
   const tag = $('squadTag');
   const p = renderer.project(s.x, 1.25 + s.r * 0.25, s.z);
-  tag.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`;
-  tag.style.left = '0';
-  tag.style.top = '0';
+  // position with left/top: the pop animation owns `transform`
+  tag.style.left = `${p.x}px`;
+  tag.style.top = `${p.y}px`;
   if (s.count !== S.shownCount) {
     tag.classList.remove('up', 'down');
     void tag.offsetWidth;

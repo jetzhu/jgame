@@ -18,6 +18,7 @@ export const BASE_RATE = 2.5; // shots per soldier per second
 const ACTIVATE = 40; // enemies start marching when the squad is this close
 const MAX_VISIBLE_BULLETS = 30;
 const ENEMY_R = 0.3;
+export const HOLD = 10; // how far in front of a raised slab the squad stops
 
 /** Small seeded PRNG (mulberry32). */
 export function rng(seed) {
@@ -69,7 +70,8 @@ export function createGame(opts = {}) {
     dormant: [], // enemies waiting to start marching, sorted by z
     bullets: [],
     gates: [],
-    vaults: [],
+    vaults: [], // also the pillars holding up slabs ({ pillar: true, slab: id })
+    slabs: [], // raised gate fields: { id, z0, z1, tiltSide, pillar, down, fellAt }
     walls: [],
     crates: [],
     barrels: [],
@@ -142,8 +144,13 @@ export function step(g, input) {
     sortDormant(g);
   }
 
-  // wake enemies that are now close enough to march
+  // wake enemies that are now close enough to march; a slab's garage empties all at once
   while (g.dormant.length && g.dormant[g.dormant.length - 1].z < s.z + ACTIVATE) g.enemies.push(g.dormant.pop());
+  for (const sl of g.slabs)
+    if (!sl.woke && sl.z0 - s.z < ACTIVATE - 10) {
+      sl.woke = true;
+      g.dormant = g.dormant.filter((e) => (e.garage === sl.id ? (g.enemies.push(e), false) : true));
+    }
 
   // ---- squad movement
   const prevX = s.x;
@@ -158,6 +165,20 @@ export function step(g, input) {
   if (boss && !boss.dead && boss.contact) s.speed = 0;
   const prevZ = s.z;
   s.z += s.speed * DT;
+
+  // a raised slab blocks the road: hold in front of it until its pillar is shot down
+  for (const sl of g.slabs) {
+    if (sl.down) continue;
+    const limit = sl.z0 - HOLD;
+    if (s.z > limit && prevZ <= limit + 1e-9) {
+      s.z = Math.max(prevZ, limit);
+      s.speed = 0;
+      if (!sl.held) {
+        sl.held = true;
+        g.events.push({ t: 'slabHold', id: sl.id, pillar: sl.pillar });
+      }
+    }
+  }
 
   // walls (lane rails): the squad's center can't cross them
   for (const w of g.walls) {
@@ -213,6 +234,7 @@ export function step(g, input) {
   g.crates = g.crates.filter((x) => !x.dead && x.z > s.z - 15);
   g.barrels = g.barrels.filter((x) => !x.dead && x.z > s.z - 15);
   g.walls = g.walls.filter((x) => x.z1 > s.z - 15);
+  g.slabs = g.slabs.filter((x) => x.z1 > s.z - 15);
   g.vaults = g.vaults.filter((x) => x.z > s.z - 15 || g.gates.some((gt) => gt.lockedBy === x.id));
 
   if (s.count <= 0) {
@@ -358,7 +380,10 @@ function damage(g, hit, b) {
   if (hit.kind === 'vault') {
     o.hp = Math.max(0, o.hp - b.dmg);
     g.events.push({ t: 'vaultHit', id: o.id, x: b.x, z: hit.z });
-    if (o.hp <= 0) g.events.push({ t: 'vaultOpen', id: o.id, x: (o.x0 + o.x1) / 2, z: o.z });
+    if (o.hp <= 0) {
+      g.events.push({ t: 'vaultOpen', id: o.id, x: (o.x0 + o.x1) / 2, z: o.z, pillar: !!o.pillar });
+      if (o.slab) collapse(g, g.slabs.find((sl) => sl.id === o.slab));
+    }
   } else if (hit.kind === 'pump') {
     o.acc += b.dmg;
     while (o.acc >= o.step) {
@@ -377,6 +402,28 @@ function damage(g, hit, b) {
       g.events.push({ t: 'bossDown', x: o.x, z: o.z });
     }
   }
+}
+
+// The last pillar is gone: the slab slams onto the road, crushing whatever is underneath, and its
+// gate field becomes walkable (its gates were locked by the pillar).
+function collapse(g, sl) {
+  if (!sl || sl.down) return;
+  sl.down = true;
+  sl.fellAt = g.t;
+  const under = (e) => e.hp > 0 && e.z > sl.z0 - 0.3 && e.z < sl.z1 + 0.3;
+  let crushed = 0;
+  for (const e of g.enemies)
+    if (under(e)) {
+      e.hp = 0;
+      crushed++;
+    }
+  g.dormant = g.dormant.filter((e) => {
+    if (!under(e)) return true;
+    crushed++;
+    return false;
+  });
+  g.stats.kills += crushed;
+  g.events.push({ t: 'slabFall', id: sl.id, z0: sl.z0, z1: sl.z1, crushed });
 }
 
 function openCrate(g, c) {

@@ -11,6 +11,7 @@ const MAX_PARTICLES = 900;
 const VIEW_BEHIND = 6;
 const VIEW_AHEAD = 95;
 const DECK_LEN = 170;
+const PILLAR_H = 2.6; // height of a slab's standing pillar (the slab's high edge rests on it)
 
 const COLORS = {
   sky: 0x0a1730,
@@ -133,6 +134,20 @@ function targetTexture() {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+// A concrete support pillar: just its number, big.
+function drawPillar(t, hp) {
+  const { c, ctx } = t;
+  const g = ctx.createLinearGradient(0, 0, c.width, 0);
+  g.addColorStop(0, '#c9c3b8');
+  g.addColorStop(1, '#a8a196');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = 'rgba(0,0,0,.08)';
+  for (let i = 0; i < 40; i++) ctx.fillRect((i * 53) % c.width, (i * 97) % c.height, 6, 6);
+  bigText(ctx, String(Math.ceil(hp)), c.width / 2, c.height * 0.3, hp >= 10000 ? 58 : 76);
+  t.tex.needsUpdate = true;
 }
 
 function drawVault(t, hp, maxHp) {
@@ -379,13 +394,14 @@ export function createRenderer(canvas) {
   }
   function gateLook(gt, g) {
     const lock = gt.lockedBy && g.vaults.find((v) => v.id === gt.lockedBy);
-    const locked = !!(lock && lock.hp > 0);
+    const locked = !!(lock && lock.hp > 0) && !gt.slab; // a raised slab already says "not yet"
     const color = locked ? COLORS.locked : !gateGood(gt) ? COLORS.bad : gt.gold ? COLORS.gold : COLORS.good;
     return { label: gateLabel(gt), color, locked, pump: !!gt.pump };
   }
 
   const vaultBodyMat = new THREE.MeshLambertMaterial({ color: 0x8a95a5 });
   function makeVault(v) {
+    if (v.pillar) return makePillar(v);
     const w = v.x1 - v.x0;
     const group = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(w, 2.5, v.depth), vaultBodyMat);
@@ -399,6 +415,71 @@ export function createRenderer(canvas) {
     group.position.set((v.x0 + v.x1) / 2, 0, v.z);
     scene.add(group);
     return { obj: group, kind: 'vault', t, shown: -1, openAt: 0 };
+  }
+
+  const concreteMat = new THREE.MeshLambertMaterial({ color: 0xbab4a9 });
+  function makePillar(v) {
+    const w = v.x1 - v.x0;
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(w, PILLAR_H, v.depth), concreteMat);
+    body.position.y = PILLAR_H / 2;
+    group.add(body);
+    const t = textCanvas(256, 340);
+    const face = new THREE.Mesh(panelGeo(w - 0.05, PILLAR_H - 0.05), new THREE.MeshLambertMaterial({ map: t.tex }));
+    face.position.set(0, PILLAR_H / 2, -v.depth / 2 - 0.01);
+    face.rotation.y = Math.PI;
+    group.add(face);
+    group.position.set((v.x0 + v.x1) / 2, 0, v.z);
+    scene.add(group);
+    return { obj: group, kind: 'vault', t, shown: -1, openAt: 0, pillar: true };
+  }
+
+  // ---------------------------------------------------------------- slabs
+  // The slab hinges on its fallen edge: a pivot group at that edge, tilted up onto the pillar.
+  const SLAB_T = 0.36;
+  const slabAngle = Math.atan2(PILLAR_H, 2 * HALF_W);
+  const slabState = new Map(); // slab id -> { pivotX, angle } for gates riding on it
+  function makeSlab(sl) {
+    const D = sl.z1 - sl.z0 + 1.2;
+    const pivot = new THREE.Group();
+    const pivotX = sl.tiltSide * (HALF_W + 0.2);
+    pivot.position.set(pivotX, 0, (sl.z0 + sl.z1) / 2);
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(2 * HALF_W + 0.4, SLAB_T, D), concreteMat);
+    slab.position.set(-sl.tiltSide * (HALF_W + 0.2), SLAB_T / 2, 0);
+    pivot.add(slab);
+    const top = new THREE.Mesh(new THREE.PlaneGeometry(2 * HALF_W + 0.3, D - 0.1), new THREE.MeshLambertMaterial({ color: 0x9aa3b1 }));
+    top.rotation.x = -Math.PI / 2;
+    top.position.set(-sl.tiltSide * (HALF_W + 0.2), SLAB_T + 0.005, 0);
+    pivot.add(top);
+    scene.add(pivot);
+    // the garage underneath: a dark floor
+    const shade = new THREE.Mesh(
+      new THREE.PlaneGeometry(2 * HALF_W, D),
+      new THREE.MeshBasicMaterial({ color: 0x05070c, transparent: true, opacity: 0.5, depthWrite: false }),
+    );
+    shade.rotation.x = -Math.PI / 2;
+    shade.position.set(0, 0.012, (sl.z0 + sl.z1) / 2);
+    scene.add(shade);
+    // rubble where the first pillar stood
+    const rubble = new THREE.Group();
+    for (let i = 0; i < 7; i++) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.3 + Math.random() * 0.4, 0.2 + Math.random() * 0.3, 0.3 + Math.random() * 0.4), concreteMat);
+      m.position.set(sl.tiltSide * (HALF_W - 0.9) + (Math.random() - 0.5) * 1.4, 0.12, sl.z0 - 0.6 + (Math.random() - 0.5) * 1.2);
+      m.rotation.set(Math.random(), Math.random(), Math.random());
+      rubble.add(m);
+    }
+    scene.add(rubble);
+    const st = { pivotX, angle: -sl.tiltSide * slabAngle, y: 0 };
+    slabState.set(sl.id, st);
+    return { obj: pivot, kind: 'slab', shade, rubble, st, extra: [shade, rubble] };
+  }
+  /** Where a gate standing at x on a slab ends up, and how it's tilted. */
+  function onSlab(st, x) {
+    const dx = x - st.pivotX;
+    const c = Math.cos(st.angle);
+    const sn = Math.sin(st.angle);
+    const up = SLAB_T + st.y;
+    return { x: st.pivotX + dx * c - up * sn, y: dx * sn + up * c, rz: st.angle };
   }
 
   const wallMat = new THREE.MeshLambertMaterial({ color: 0x3e6db5 });
@@ -457,7 +538,7 @@ export function createRenderer(canvas) {
   }
 
   // Geometries/materials shared by many objects; everything else belongs to one object.
-  const shared = new Set([postGeo, postMat, pumpPostMat, targetGeo, targetMat, vaultBodyMat, wallMat, crateGeo, barrelGeo, barrelMat, bandGeo, bandMat]);
+  const shared = new Set([postGeo, postMat, pumpPostMat, targetGeo, targetMat, vaultBodyMat, concreteMat, wallMat, crateGeo, barrelGeo, barrelMat, bandGeo, bandMat]);
   function disposeObj(obj) {
     scene.remove(obj);
     obj.traverse((m) => {
@@ -565,6 +646,15 @@ export function createRenderer(canvas) {
       burst(e.x, 1.6, e.z, 120, new THREE.Color(0x9c1838), 10, 0.25, 1.1, 8);
       burst(e.x, 1.6, e.z, 60, new THREE.Color(0xffd34d), 8, 0.18, 1.1, 9);
       shake = 0.8;
+    } else if (e.t === 'slabFall') {
+      const st = slabState.get(e.id);
+      const hi = st ? -st.pivotX : 0;
+      for (let z = e.z0; z <= e.z1; z += 1.5) {
+        burst(hi, 0.3, z, 3, new THREE.Color(0xd7d1c6), 6, 0.3, 1.1, 3);
+        burst(-hi, 0.3, z, 2, new THREE.Color(0xd7d1c6), 5, 0.25, 0.9, 2);
+      }
+      burst(0, 0.4, e.z0, 40, new THREE.Color(0xc8c2b6), 9, 0.3, 1.2, 4);
+      shake = 1;
     } else if (e.t === 'pump') {
       const o = objs.get(`g${e.id}`);
       if (o) o.pumpAt = performance.now();
@@ -679,12 +769,38 @@ export function createRenderer(canvas) {
     // pooled objects
     const seen = new Set();
     const inView = (z) => z > zMin && z < zMax;
+    for (const sl of g.slabs) {
+      if (sl.z1 < zMin || sl.z0 > zMax) continue;
+      const key = `s${sl.id}`;
+      let o = objs.get(key);
+      if (!o) objs.set(key, (o = makeSlab(sl)));
+      seen.add(key);
+      const up = -sl.tiltSide * slabAngle;
+      if (!sl.down) o.st.angle = up;
+      else {
+        // slam: accelerate down, small bounce, then settle flush with the road
+        o.fallAt ||= now;
+        const p = Math.min(1, (now - o.fallAt) / 420);
+        const bounce = p < 1 ? 0 : Math.max(0, 1 - (now - o.fallAt - 420) / 250);
+        o.st.angle = up * (1 - p * p) + up * 0.06 * Math.sin(bounce * Math.PI) * bounce;
+        o.st.y = p < 1 ? 0 : -Math.min(SLAB_T - 0.02, ((now - o.fallAt - 420) / 300) * SLAB_T);
+        o.shade.material.opacity = 0.5 * (1 - p);
+      }
+      o.obj.rotation.z = o.st.angle;
+      o.obj.position.y = o.st.y;
+    }
     for (const gt of g.gates) {
       if (!inView(gt.z)) continue;
       const key = `g${gt.id}`;
       let o = objs.get(key);
       if (!o) objs.set(key, (o = makeGate(gt)));
       seen.add(key);
+      const st = gt.slab && slabState.get(gt.slab);
+      if (st) {
+        const p = onSlab(st, (gt.x0 + gt.x1) / 2);
+        o.obj.position.set(p.x, p.y, gt.z);
+        o.obj.rotation.z = p.rz;
+      }
       const look = gateLook(gt, g);
       const lk = `${look.label}|${look.color}|${look.locked}|${look.pump}`;
       if (o.key !== lk) {
@@ -716,7 +832,8 @@ export function createRenderer(canvas) {
       seen.add(key);
       const hp = Math.ceil(v.hp);
       if (hp !== o.shown && (now - (o.drawnAt || 0) > 60 || hp === 0)) {
-        drawVault(o.t, v.hp, v.maxHp);
+        if (o.pillar) drawPillar(o.t, v.hp);
+        else drawVault(o.t, v.hp, v.maxHp);
         o.shown = hp;
         o.drawnAt = now;
       }
@@ -768,6 +885,8 @@ export function createRenderer(canvas) {
     for (const [key, o] of objs) {
       if (seen.has(key)) continue;
       disposeObj(o.obj);
+      for (const x of o.extra || []) disposeObj(x);
+      if (o.kind === 'slab') for (const [id, st] of slabState) if (st === o.st) slabState.delete(id);
       objs.delete(key);
     }
 
@@ -805,8 +924,12 @@ export function createRenderer(canvas) {
 
   /** Forget everything from the previous game. */
   function reset() {
-    for (const o of objs.values()) disposeObj(o.obj);
+    for (const o of objs.values()) {
+      disposeObj(o.obj);
+      for (const x of o.extra || []) disposeObj(x);
+    }
     objs.clear();
+    slabState.clear();
     if (finishObj) disposeObj(finishObj);
     finishObj = null;
     parts.length = 0;

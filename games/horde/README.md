@@ -2,10 +2,13 @@
 
 A lane-shooter squad game with no login: https://jgame.duckdns.org/horde_gate/
 
-Your squad runs down a three-lane bridge and fires on its own; you only steer. Gates change the squad
+Your squad runs down a three-lane bridge and fires on its own; you steer (and hold Up to run faster). Gates change the squad
 (`+N`, `×N` good; `−N`, `÷N` bad), every soldier adds firepower, and every enemy that reaches you
-takes soldiers with it. Vaults guard walled lanes of gold gates, pump gates improve while you shoot
-them, crates give power-ups, barrels explode. Every 5th level ends with a boss; survivors climb a
+takes soldiers with it. The signature set piece is the slab: a field of gates raised on a concrete
+slab over a garage full of the horde. The squad holds in front of it until the pillar is shot
+down; the slab then crushes whatever is still underneath and its gates become walkable. Vaults
+guard walled lanes of gold gates, pump gates improve while you shoot them, crates give power-ups,
+barrels explode. Every 5th level ends with a boss; survivors climb a
 ×1..×5 coin ramp. Coins buy permanent upgrades. Endless mode runs until you are overrun.
 
 ## Layout
